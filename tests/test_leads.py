@@ -167,3 +167,67 @@ def test_listener_lets_limited_approver_decide_but_nothing_else():
     assert handle_event(msg("C7 1", "STRANGER"), h, approvers=["BOSS"], card_approvers=["OPS_GIRL"]) is None
     handle_event(msg("暂停 douyin", "BOSS"), h, approvers=["BOSS"], card_approvers=["OPS_GIRL"])
     assert h.posts
+
+
+# ---------------------------------------------------------------- 按卡片类型分群
+def _sent(notify_dir):
+    """发出去的通知：[(种类, 目标群或 None, 正文)]，按发送顺序。"""
+    out = []
+    for p in sorted(notify_dir.glob("*.md")):
+        text = p.read_text(encoding="utf-8")
+        head = text.splitlines()[0]
+        target = head.split("target=")[1].split(" ")[0] if "target=" in head else None
+        out.append((p.stem.split("-", 3)[-1], target, text))
+    return out
+
+
+def test_cards_route_to_group_by_type_and_ack_follows(home, hub, notify_dir):
+    hub.cfg["quiet_hours"] = None
+    hub.cfg.setdefault("notifier", {})["dingtalk"] = {"chat_id": "cidMAIN", "approvers": ["BOSS"],
+                                                      "card_chats": {"lead_batch": "cidLEADS"}}
+    lead = _lead_card(hub)
+    other = hub.create_card({"kind": "publish_batch", "title": "今晚待发布", "options": [{"key": "a", "label": "发"}, {"key": "b", "label": "不发"}]}, [])
+    hub.enqueue_notice("message", "日报", "今天的日报")
+    hub.flush_outbox()
+    by_title = {("线索" if "今日线索" in t else "发布" if "今晚待发布" in t else "日报"): tgt for _, tgt, t in _sent(notify_dir)}
+    assert by_title == {"线索": "cidLEADS", "发布": None, "日报": None}
+    # 批红回执回到卡片所在的群
+    assert _dingtalk_decide(hub, lead, "BOSS")["ok"] and _dingtalk_decide(hub, other, "BOSS", "a")["ok"]
+    hub.flush_outbox()
+    acks = [(tgt, t) for _, tgt, t in _sent(notify_dir) if "已收到" in t]
+    assert sorted(tgt or "" for tgt, _ in acks) == ["", "cidLEADS"]
+    assert next(t for tgt, t in acks if tgt == "cidLEADS").count("今日线索")
+
+
+def test_denied_reply_notice_goes_to_the_cards_group(home, hub, notify_dir):
+    hub.cfg["quiet_hours"] = None
+    hub.cfg.setdefault("notifier", {})["dingtalk"] = {"chat_id": "cidMAIN", "card_chats": {"今日线索卡片": "cidLEADS"}}
+    lead = _lead_card(hub)
+    seq = hub.find_card(lead)["seq"]
+    hub.enqueue_notice("message", "批红没成功", "没有权限", priority=1, ref=f"reply:C{seq}")
+    hub.enqueue_notice("message", "批红没成功", "找不到卡片", priority=1, ref="reply:C999")
+    hub.flush_outbox()
+    got = {t.split("\n\n")[1].strip(): tgt for _, tgt, t in _sent(notify_dir) if "批红没成功" in t}
+    assert got == {"没有权限": "cidLEADS", "找不到卡片": None}
+
+
+def test_agent_written_kind_does_not_route(home, hub, notify_dir):
+    hub.cfg["quiet_hours"] = None
+    hub.cfg.setdefault("notifier", {})["dingtalk"] = {"chat_id": "cidMAIN", "card_chats": {"lead_batch": "cidLEADS"}}
+    r = hub.ingest({"source": "cron", "type": "cron.weekly_review"})
+    hub.create_card({"kind": "lead_batch", "title": "本周需求 Top 10", "options": [{"key": "a", "label": "同意"}, {"key": "b", "label": "不做"}]}, [r["task_id"]])
+    hub.flush_outbox()
+    assert [tgt for _, tgt, t in _sent(notify_dir) if "Top 10" in t] == [None]
+
+
+def test_dingtalk_cmd_uses_target_group_and_listener_watches_all_groups():
+    from popto_ops.notifier import DingTalkNotifier
+    from popto_ops.notifier.listener import listen_chats
+
+    n = DingTalkNotifier({"chat_id": "cidMAIN"})
+    assert n.build_cmd("hi")[-2:] == ["--chat-id", "cidMAIN"]
+    assert n.build_cmd("hi", target="cidLEADS")[-2:] == ["--chat-id", "cidLEADS"]
+    assert n.build_cmd(file="a.md", target="cidLEADS")[-2:] == ["--chat-id", "cidLEADS"]
+    chats = listen_chats({"chat_id": "cidMAIN", "card_chats": {"lead_batch": "cidLEADS", "今日线索卡片": "cidLEADS", "x": "cidMAIN", "y": None}})
+    assert [c for c, _ in chats] == ["cidMAIN", "cidLEADS"] and chats[0][1] == "" and len(chats[1][1]) == 6
+    assert listen_chats({}) == []

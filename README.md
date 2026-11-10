@@ -74,7 +74,7 @@ dws 目前发的卡片不支持按钮回调，所以卡片以 Markdown 消息发
 | `已发 pk_c1_douyin [链接]` | 半自动发布完成后补登记，自动排定数据采集；视频号没有链接、或给的是短链时，采集时按标题在后台对上作品 |
 | `暂停 douyin` / `恢复 douyin` | 暂停 / 恢复某个平台、规则或 Agent 的全部自动化 |
 
-只接受 `approvers` 里的人（全权：所有卡片和指令）；想让别人只批某一类卡片，在 `local.yaml` 的 `notifier.dingtalk.card_approvers` 里按类型加人，例如 `{lead_batch: [<ID>]}` 只能批线索卡片，批别的卡片会收到“没有审批权限”的提示，发其他指令会被忽略（改完重启钉钉监听和中台）。同样的操作也可以用 `opsctl decide C12 1`、`opsctl note`、`opsctl demand`、`opsctl published`。互动卡片回调（`user_card_action_triggered`）也已接入监听，dws 支持按钮卡片后可直接使用。
+只接受 `approvers` 里的人（全权：所有卡片和指令）；想让别人只批某一类卡片，在 `local.yaml` 的 `notifier.dingtalk.card_approvers` 里按类型加人，例如 `{lead_batch: [<ID>]}` 只能批线索卡片，批别的卡片会收到“没有审批权限”的提示，发其他指令会被忽略（改完重启钉钉监听和中台）。想把某类卡片发到另一个群，在 `notifier.dingtalk.card_chats` 里按类型写群 ID，例如 `{lead_batch: "<线索群 ID>"}`：这类卡片连同附件、批红回执都发到那个群，那个群里的回复也会被监听；日报、告警和其他卡片仍发默认群。同样的操作也可以用 `opsctl decide C12 1`、`opsctl note`、`opsctl demand`、`opsctl published`。互动卡片回调（`user_card_action_triggered`）也已接入监听，dws 支持按钮卡片后可直接使用。
 
 ## 关键行为
 

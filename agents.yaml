@@ -131,6 +131,9 @@ notifier:
                               # 键 = 产出卡片的规则名（如 今日线索卡片），或脚本产出卡片的 kind（lead_batch、publish_batch）；
                               # Agent 写的卡片 kind 是模型自己填的，只能用规则名限定。值 = ID 列表，写法同 approvers。
                               # 例：{lead_batch: ["<openDingTalkId>", "<userId>"]}
+    card_chats: {}            # 按卡片类型分群：这类卡片（连同附件、批红回执）发到指定群，其余仍发 chat_id。
+                              # 键的写法同 card_approvers（规则名，或脚本卡片的 kind）；值 = 群的 openConversationId。
+                              # 这些群里的回复同样会被监听；机器人 / 发送账号要在群里。例：{lead_batch: "cidXXXX=="}
     at_on_alert: []
   lark:
     chat_id: null

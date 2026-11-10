@@ -636,6 +636,26 @@ class Hub:
             scopes.add(card["kind"])
         return scopes
 
+    def card_chat(self, card_ref: str | None) -> str | None:
+        """这张卡片该发到哪个群（notifier.dingtalk.card_chats 按卡片类型分群）；None = 默认群。"""
+        routes = ((self.cfg.get("notifier") or {}).get("dingtalk") or {}).get("card_chats") or {}
+        if not routes or not card_ref:
+            return None
+        card = self.find_card(card_ref)
+        if not card:
+            return None
+        scopes = self.card_scopes(card)
+        return next((str(chat) for key, chat in routes.items() if key in scopes and chat), None)
+
+    def _target(self, p: dict) -> str | None:
+        """发件队列里一条消息的去向：卡片、卡片附件、批红回执和“批红没成功”的提示都跟着卡片走。"""
+        ref = str(p.get("ref") or "")
+        if p.get("card_id"):
+            return self.card_chat(p["card_id"])
+        if ref.startswith(("ack:", "reply:")):
+            return self.card_chat(ref.split(":", 1)[1])
+        return None
+
     def approver_denied(self, card_ref: str, by: str) -> str | None:
         """钉钉来的批红：全权审批人（approvers）什么卡片都能批；只在 card_approvers 里的人只能批对应类型。"""
         dt = (self.cfg.get("notifier") or {}).get("dingtalk") or {}
@@ -753,8 +773,14 @@ class Hub:
             wake = window_end(tnow, quiet) if in_quiet else None
             tomorrow = window_end(today_start(tnow) + timedelta(days=1), quiet) if quiet else today_start(tnow) + timedelta(days=1, hours=8)
             # 隔夜 / 超限积压的卡片：≥2 张时合并成一条“待批清单”（只算 1 张）
-            backlog = [p for p in pending if p["kind"] == "card" and p["ref"] == "deferred"]
-            if len(backlog) >= 2 and not in_quiet and cards_today < cap:
+            # 分群时各群各自合并：不把别的群的卡片合进来
+            deferred_cards = [p for p in pending if p["kind"] == "card" and p["ref"] == "deferred"]
+            by_chat: dict[str | None, list] = {}
+            for p in deferred_cards:
+                by_chat.setdefault(self._target(p), []).append(p)
+            for chat, backlog in by_chat.items():
+                if not (len(backlog) >= 2 and not in_quiet and cards_today < cap):
+                    continue
                 items = []
                 for p in backlog:
                     card = self.q1("SELECT * FROM cards WHERE id=?", (p["card_id"],))
@@ -762,7 +788,7 @@ class Hub:
                         items.append((_load(card["payload"], {}), card["seq"], card["expires_at"]))
                 if items:
                     title, body = render_card_batch(items, bot)
-                    res = self._send("card_batch", title, body, 1, "batch")
+                    res = self._send("card_batch", title, body, 1, "batch", chat)
                     ok = res.get("ok")
                     with self.tx() as c:
                         for p in backlog:
@@ -793,7 +819,7 @@ class Hub:
                         card = self.q1("SELECT status FROM cards WHERE id=?", (p["card_id"],))
                         if card and card["status"] in ("pending",):
                             continue
-                    res = self._send_file(p["body"] or "", p["title"], prio, p["ref"])
+                    res = self._send_file(p["body"] or "", p["title"], prio, p["ref"], self._target(p))
                     with self.tx() as c:
                         if res.get("ok"):
                             c.execute("UPDATE outbox SET status='sent', sent_at=?, error=NULL WHERE id=?", (iso(), p["id"]))
@@ -817,7 +843,7 @@ class Hub:
                     title, body = render_card(_load(card["payload"], {}), card["seq"], card["expires_at"], bot)
                 else:
                     title, body = p["title"] or "", p["body"] or ""
-                res = self._send(p["kind"], title, body, prio, p["ref"])
+                res = self._send(p["kind"], title, body, prio, p["ref"], self._target(p))
                 with self.tx() as c:
                     if res.get("ok"):
                         c.execute("UPDATE outbox SET status='sent', sent_at=?, error=NULL WHERE id=?", (iso(), p["id"]))
@@ -834,15 +860,18 @@ class Hub:
                     failed += 1
         return {"sent": sent, "deferred": deferred, "failed": failed}
 
-    def _send_file(self, path: str, title: str | None, prio: int, ref: str | None) -> dict:
+    def _target_kw(self, target: str | None) -> dict:
+        return {"target": target} if target and getattr(self.notifier, "supports_target", False) else {}
+
+    def _send_file(self, path: str, title: str | None, prio: int, ref: str | None, target: str | None = None) -> dict:
         try:
-            return self.notifier.send_file(Path(path), title=title, priority=prio, ref=ref)
+            return self.notifier.send_file(Path(path), title=title, priority=prio, ref=ref, **self._target_kw(target))
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": str(e)[:500]}
 
-    def _send(self, kind: str, title: str, body: str, prio: int, ref: str | None) -> dict:
+    def _send(self, kind: str, title: str, body: str, prio: int, ref: str | None, target: str | None = None) -> dict:
         try:
-            return self.notifier.send(kind, title, body, priority=prio, ref=ref)
+            return self.notifier.send(kind, title, body, priority=prio, ref=ref, **self._target_kw(target))
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": str(e)[:500]}
 

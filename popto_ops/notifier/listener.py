@@ -133,7 +133,9 @@ def handle_event(raw: dict, hub: HubClient, approvers: list[str], allow_any: boo
                         f"dingtalk:{raw.get('event_id') or raw.get('eventId') or hash(json.dumps(raw, sort_keys=True, default=str))}")
     res = hub.emit(evt)
     if evt["type"] == "decision.made" and isinstance(res, dict) and res.get("ok") is False:
-        hub.notify("message", "批红没成功", f"{evt['summary']}\n\n{res.get('error')}", priority=1)
+        # ref 带上卡片编号：分群时提示发回卡片所在的群
+        hub.notify("message", "批红没成功", f"{evt['summary']}\n\n{res.get('error')}", priority=1,
+                   ref=f"reply:{evt['data'].get('card')}")
     return res
 
 
@@ -171,9 +173,9 @@ def _watch_stderr(proc: subprocess.Popen, state: dict, key: str) -> None:
 
 
 def consume(cmd: list[str], hub: HubClient, approvers: list[str], allow_any: bool, stop: threading.Event,
-            card_approvers: list[str] | None = None) -> None:
+            card_approvers: list[str] | None = None, key: str | None = None) -> None:
     backoff = 5
-    key = cmd[3] if len(cmd) > 3 else "dws"
+    key = key or (cmd[3] if len(cmd) > 3 else "dws")
     while not stop.is_set():
         log.info("启动：%s", " ".join(cmd))
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -229,10 +231,13 @@ POLL_LOOKBACK = 600      # 启动时回看 10 分钟
 
 
 def poll_group(chat_id: str, hub: HubClient, approvers: list[str], allow_any: bool, stop: threading.Event,
-               dws: str = "dws", interval: float = POLL_INTERVAL, card_approvers: list[str] | None = None) -> None:
+               dws: str = "dws", interval: float = POLL_INTERVAL, card_approvers: list[str] | None = None,
+               tag: str = "") -> None:
+    """tag：默认群为空；分群时每个群一个标记，轮询进度和状态各记各的。"""
     from datetime import datetime, timedelta
 
-    state_path = paths.ops_data() / "listener.poll.json"
+    state_path = paths.ops_data() / (f"listener.poll.{tag}.json" if tag else "listener.poll.json")
+    status_key = f"group_poll:{tag}" if tag else "group_poll"
     try:
         st = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -267,11 +272,25 @@ def poll_group(chat_id: str, hub: HubClient, approvers: list[str], allow_any: bo
                                       encoding="utf-8")
             except OSError:
                 pass
-            _write_status("group_poll", connected=True, since=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+            _write_status(status_key, connected=True, since=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
         except Exception as e:  # noqa: BLE001
             log.warning("轮询群消息失败：%s", str(e)[:300])
-            _write_status("group_poll", connected=False, last_error=str(e)[:300])
+            _write_status(status_key, connected=False, last_error=str(e)[:300])
         stop.wait(interval)
+
+
+def listen_chats(dt: dict) -> list[tuple[str, str]]:
+    """要监听回复的群：默认群 + card_chats 里分出去的群。返回 (群 ID, 标记)；默认群标记为空。"""
+    import hashlib
+
+    out: list[tuple[str, str]] = []
+    if dt.get("chat_id"):
+        out.append((str(dt["chat_id"]), ""))
+    for chat in (dt.get("card_chats") or {}).values():
+        chat = str(chat or "")
+        if chat and chat not in [c for c, _ in out]:
+            out.append((chat, hashlib.sha1(chat.encode()).hexdigest()[:6]))
+    return out
 
 
 def main() -> int:
@@ -287,12 +306,14 @@ def main() -> int:
         log.error("notifier.dingtalk.approvers 为空：为安全起见不接受任何人的批红。请在 local.yaml 配置后重启。")
     stop = threading.Event()
     threads = []
-    if dt.get("chat_id"):
-        cmd = ["dws", "event", "consume", "user_im_message_receive_group", "--group", dt["chat_id"], "--flatten", "-f", "ndjson"]
-        threads.append(threading.Thread(target=consume, args=(cmd, hub, approvers, allow_any, stop, card_approvers), daemon=True))
-        threads.append(threading.Thread(target=poll_group, args=(dt["chat_id"], hub, approvers, allow_any, stop),
-                                        kwargs={"card_approvers": card_approvers}, daemon=True))
-    else:
+    chats = listen_chats(dt)
+    for chat, tag in chats:
+        cmd = ["dws", "event", "consume", "user_im_message_receive_group", "--group", chat, "--flatten", "-f", "ndjson"]
+        threads.append(threading.Thread(target=consume, args=(cmd, hub, approvers, allow_any, stop, card_approvers),
+                                        kwargs={"key": f"{cmd[3]}:{tag}" if tag else None}, daemon=True))
+        threads.append(threading.Thread(target=poll_group, args=(chat, hub, approvers, allow_any, stop),
+                                        kwargs={"card_approvers": card_approvers, "tag": tag}, daemon=True))
+    if not chats:
         log.warning("未配置 notifier.dingtalk.chat_id，只监听互动卡片回调")
     cmd = ["dws", "event", "consume", "user_card_action_triggered", "--flatten", "-f", "ndjson"]
     threads.append(threading.Thread(target=consume, args=(cmd, hub, approvers, allow_any, stop, card_approvers), daemon=True))
