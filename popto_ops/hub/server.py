@@ -29,6 +29,19 @@ def make_handler(hub: Hub, token: str | None):
             self.end_headers()
             self.wfile.write(data)
 
+        def _client_alive(self) -> bool:
+            """长轮询期间对端是否还连着：可读且读到 0 字节 = 对端已关闭。"""
+            import select
+            import socket
+
+            try:
+                r, _, _ = select.select([self.connection], [], [], 0)
+                if not r:
+                    return True
+                return bool(self.connection.recv(1, socket.MSG_PEEK))
+            except OSError:
+                return False
+
         def _body(self) -> dict:
             n = int(self.headers.get("Content-Length") or 0)
             if not n:
@@ -47,7 +60,15 @@ def make_handler(hub: Hub, token: str | None):
             u = urlparse(self.path)
             qs = {k: v[-1] for k, v in parse_qs(u.query).items()}
             try:
-                self._send(200, self._get(u.path, qs))
+                result = self._get(u.path, qs)
+                try:
+                    self._send(200, result)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    # 长轮询的接单程序已经断开（如 opsd 重启）：刚派给它的任务立刻放回队列，不等租约过期
+                    task = (result or {}).get("task") if u.path == "/v1/lease" and isinstance(result, dict) else None
+                    if task:
+                        hub.unlease(task["task"]["id"], reason="接单程序连接已断开，任务放回队列")
+                    return
             except HubError as e:
                 self._send(e.status, {"error": str(e)})
             except Exception as e:  # noqa: BLE001
@@ -77,7 +98,7 @@ def make_handler(hub: Hub, token: str | None):
             if path == "/v1/lease":
                 agents = qs.get("agents")
                 got = hub.lease(qs.get("worker", "unknown"), agents.split(",") if agents else None,
-                                min(float(qs.get("wait", 0)), 55.0))
+                                min(float(qs.get("wait", 0)), 55.0), alive=self._client_alive)
                 return {"task": got}
             if path == "/v1/tasks":
                 return {"tasks": hub.list_tasks(qs.get("state"), int(qs.get("limit", 50)))}

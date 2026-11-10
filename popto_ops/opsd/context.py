@@ -21,7 +21,7 @@ ROLE = {
 
 # payload_ref 可读的表与“since”对应的时间列；comments / signals 属于不可信外部内容
 TABLES = {
-    "contents": "created_at", "posts": "published_at", "post_metrics": "captured_at", "comments": "created_at",
+    "contents": "created_at", "posts": "published_at", "post_metrics": "captured_at", "comments": "collected_at",
     "signals": "created_at", "demands": "updated_at", "leads": "updated_at", "funnel_daily": "date",
     "publish_packs": "created_at", "listening_terms": "updated_at",
 }

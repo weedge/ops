@@ -506,3 +506,41 @@ def test_friendly_publish_errors():
     raw = Exception('Locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for get_by_role("button", name="发表视频")')
     assert friendly_error(raw) == "等「发表视频」超时（多半是网络慢或页面改版）"
     assert friendly_error(PublishError("视频上传失败")) == "视频上传失败"
+
+
+def test_late_registration_skips_past_checkpoints(home):
+    ops = db.open_ops()
+    at("2026-11-10 10:00")
+    pid = metrics.register_post(ops, {"platform": "douyin", "platform_post_id": "77", "title": "老作品",
+                                      "published_at": "2026-08-31T23:49:00+08:00"})
+    jobs = {r[0]: (r[1] or "") for r in ops.execute("SELECT checkpoint, done_at FROM metric_jobs WHERE post_id=?", (pid,))}
+    assert set(jobs) == {"1h", "24h", "72h", "7d", "late"}
+    assert all(jobs[c].startswith("skipped:") for c in ("1h", "24h", "72h", "7d")) and jobs["late"] == ""
+    # 刚发的作品照常排 4 个节点，没有 late
+    pid2 = metrics.register_post(ops, {"platform": "douyin", "platform_post_id": "78", "published_at": "2026-11-10T09:30:00+08:00"})
+    cps = [r[0] for r in ops.execute("SELECT checkpoint FROM metric_jobs WHERE post_id=? AND done_at IS NULL", (pid2,))]
+    assert sorted(cps) == ["1h", "24h", "72h", "7d"]
+
+
+def test_comment_batch_payload_uses_collected_at(home):
+    from popto_ops.collectors.comments import save_comments
+    from popto_ops.opsd.context import resolve_payload_ref
+    ops = db.open_ops()
+    at("2026-11-10 10:00")
+    n = save_comments(ops, "douyin_1", [{"id": "c1", "text": "三天前的老评论", "author": "某人", "created_at": 1762500000}],
+                      collected_at="2026-11-10T10:00:00+08:00")
+    ops.commit()
+    rows, untrusted = resolve_payload_ref("ops.db://comments?post_id=douyin_1&since=2026-11-10T10:00:00+08:00", ops)
+    assert n == 1 and untrusted and [r["text"] for r in rows] == ["三天前的老评论"]
+    assert rows[0]["author_hash"] != "某人"
+
+
+def test_late_snapshots_never_flag_anomaly(home):
+    ops = db.open_ops()
+    at("2026-11-10 10:00")
+    for i in range(6):
+        pid = metrics.register_post(ops, {"platform": "douyin", "platform_post_id": f"l{i}", "published_at": "2026-08-01T10:00:00+08:00"})
+        metrics.save_snapshot(ops, {"id": pid, "platform": "douyin", "title": "x"}, "late", {"views": 10}, "creator")
+    pid = metrics.register_post(ops, {"platform": "douyin", "platform_post_id": "big", "published_at": "2026-08-01T10:00:00+08:00"})
+    evs = metrics.save_snapshot(ops, {"id": pid, "platform": "douyin", "title": "x"}, "late", {"views": 5000}, "creator")
+    assert not any(e["type"] == "social.metrics.anomaly" for e in evs)

@@ -440,3 +440,15 @@ def test_card_local_file_sent_after_card(hub, home):
     assert [r["kind"] for r in rows] == ["card", "file"] and rows[1]["body"] == str(f)
     hub.flush_outbox()
     assert [r["status"] for r in hub.q("SELECT status FROM outbox WHERE card_id=? ORDER BY id", (cid,))] == ["sent", "sent"]
+
+
+def test_dead_long_poll_does_not_take_task(hub):
+    at("2026-11-10 10:00")
+    hub.ingest({"source": "cron", "type": "cron.daily_brief", "dedup_key": "b"})
+    assert hub.lease("w", None, alive=lambda: False) is None          # 对端已断开：不派
+    t = hub.lease("w", None, alive=lambda: True)
+    assert t
+    hub.unlease(t["task"]["id"], reason="测试")                       # 发送失败：放回队列
+    row = hub.q1("SELECT state, attempts, lease_owner FROM tasks WHERE id=?", (t["task"]["id"],))
+    assert row["state"] == "queued" and row["attempts"] == 0 and row["lease_owner"] is None
+    assert hub.lease("w", None)["task"]["id"] == t["task"]["id"]

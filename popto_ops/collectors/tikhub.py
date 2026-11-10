@@ -35,11 +35,23 @@ class TikHub:
             return json.loads(r.read().decode())
 
     def douyin_video_stats(self, aweme_id: str) -> dict:
+        """公开接口（他人作品 / 创作者后台不可用时的兜底）。2026-11 起 app v3 返回 aweme_details 列表，
+        部分作品为空，再退到 web 接口；web 接口播放数恒为 0（不公开），记成 None 而不是 0，免得被当成“播放为 0”。"""
         d = self.get("/api/v1/douyin/app/v3/fetch_one_video", aweme_id=aweme_id)
-        detail = ((d.get("data") or {}).get("aweme_detail") or {})
+        data = d.get("data") or {}
+        detail = data.get("aweme_detail") or next(iter(data.get("aweme_details") or []), None)
+        source = "app"
+        if not detail:
+            d = self.get("/api/v1/douyin/web/fetch_one_video", aweme_id=aweme_id)
+            detail, source = (d.get("data") or {}).get("aweme_detail"), "web"
+        if not detail:
+            raise LookupError("TikHub 查不到这条作品（可能已删除、私密或被限流）")
         s = detail.get("statistics") or {}
+        views = s.get("play_count")
+        if source == "web" and not views:
+            views = None
         return {
-            "views": s.get("play_count"), "likes": s.get("digg_count"), "comments": s.get("comment_count"),
+            "views": views, "likes": s.get("digg_count"), "comments": s.get("comment_count"),
             "shares": s.get("share_count"), "favorites": s.get("collect_count"),
         }
 

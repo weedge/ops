@@ -22,6 +22,7 @@ CHECKPOINTS = {"1h": timedelta(hours=1), "24h": timedelta(hours=24), "72h": time
 METRIC_COLS = ["views", "likes", "comments", "shares", "favorites", "follows_gained", "completion_rate",
                "avg_watch_sec", "profile_visits"]
 GIVE_UP_AFTER = timedelta(hours=12)
+LATE_TOLERANCE = timedelta(hours=2)   # 登记时某个节点已过点超过这么久，就不再采这个节点
 
 
 def register_post(ops, d: dict) -> str:
@@ -36,8 +37,18 @@ def register_post(ops, d: dict) -> str:
          published, d.get("channel_code"), d.get("publish_mode", "manual")),
     )
     base = parse_iso(published)
+    late = False
     for cp, delta in CHECKPOINTS.items():
-        ops.execute("INSERT OR IGNORE INTO metric_jobs(post_id,checkpoint,due_at) VALUES (?,?,?)", (pid, cp, iso(base + delta)))
+        due = base + delta
+        if now() - due > LATE_TOLERANCE:
+            # 补登记时早已过点：不拿现在的数冒充 1h / 24h 快照（会污染同节点中位数和异常判断）
+            ops.execute("INSERT OR IGNORE INTO metric_jobs(post_id,checkpoint,due_at,done_at,last_error) VALUES (?,?,?,?,?)",
+                        (pid, cp, iso(due), "skipped:" + iso(), "登记时已过点，未采"))
+            late = True
+        else:
+            ops.execute("INSERT OR IGNORE INTO metric_jobs(post_id,checkpoint,due_at) VALUES (?,?,?)", (pid, cp, iso(due)))
+    if late:  # 补一张“补登记时”的快照，让这条内容至少有一份真实数据
+        ops.execute("INSERT OR IGNORE INTO metric_jobs(post_id,checkpoint,due_at) VALUES (?,?,?)", (pid, "late", iso()))
     return pid
 
 
@@ -50,11 +61,17 @@ def cmd_plan() -> None:
         if not d.get("platform"):
             continue
         ids.append(register_post(ops, d))
-    emit_result(f"登记 {len(ids)} 条已发布内容并排定 4 个采集节点" if ids else "事件里没有可登记的发布信息", posts=ids)
+    late = [i for i in ids if ops.execute("SELECT 1 FROM metric_jobs WHERE post_id=? AND checkpoint='late'", (i,)).fetchone()]
+    msg = f"登记 {len(ids)} 条已发布内容"
+    if len(ids) - len(late):
+        msg += f"，{len(ids) - len(late)} 条按 1h / 24h / 72h / 7d 排定采集"
+    if late:
+        msg += f"，{len(late)} 条登记时已过点（只补采一次当前数据）"
+    emit_result(msg if ids else "事件里没有可登记的发布信息", posts=ids)
 
 
 def _anomaly(ops, post: dict, cp: str, views: int | None) -> str | None:
-    if not views:
+    if not views or cp not in CHECKPOINTS:   # “late”补登记快照各条发布时长不同，互相比没有意义
         return None
     vals = [r[0] for r in ops.execute(
         "SELECT m.views FROM post_metrics m JOIN posts p ON p.id=m.post_id WHERE p.platform=? AND m.checkpoint=?"
@@ -105,9 +122,23 @@ def cmd_collect() -> None:
         "SELECT j.*, p.platform, p.platform_post_id, p.title, p.id AS pid FROM metric_jobs j JOIN posts p ON p.id=j.post_id"
         " WHERE j.done_at IS NULL AND j.due_at<=? ORDER BY j.due_at LIMIT 200", (iso(),)))
     events, done, manual, failed = [], 0, [], []
+    # 自有作品优先读抖音创作者后台（有真实播放量），一次会话取完；取不到的再走 TikHub
+    creator: dict[str, dict] = {}
+    dy_ids = {j["platform_post_id"] for j in due if j["platform"] == "douyin" and str(j["platform_post_id"] or "").isdigit()}
+    creator_err = None
+    if dy_ids:
+        try:
+            from .creator import douyin_stats
+            creator = douyin_stats(dy_ids)
+        except Exception as e:  # noqa: BLE001
+            creator_err = str(e)[:200]
     for j in due:
         post = {"id": j["pid"], "platform": j["platform"], "title": j["title"]}
         try:
+            if j["platform"] == "douyin" and j["platform_post_id"] in creator:
+                events += save_snapshot(ops, post, j["checkpoint"], creator[j["platform_post_id"]], "creator")
+                done += 1
+                continue
             if j["platform"] == "douyin" and th.configured and j["platform_post_id"].isdigit():
                 if budget and used + th.requests >= budget:
                     raise RuntimeError("TikHub 今日请求预算已用完")
@@ -128,6 +159,8 @@ def cmd_collect() -> None:
         except Exception:  # noqa: BLE001
             pass
     parts = [f"采到 {done} 个快照"]
+    if creator_err:
+        parts.append(f"创作者后台没取到（{creator_err}），已用 TikHub 兜底")
     if manual:
         parts.append(f"{len(manual)} 个需人工导出（opsctl metrics import）")
     if failed:

@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS post_metrics (
 CREATE TABLE IF NOT EXISTS comments (
   id TEXT PRIMARY KEY, post_id TEXT, author_hash TEXT, text TEXT, likes INTEGER,
   created_at TEXT, category TEXT, sentiment TEXT, reply_draft TEXT, reply_status TEXT,
-  purge_after TEXT
+  purge_after TEXT, collected_at TEXT
 );
 CREATE TABLE IF NOT EXISTS signals (
   id TEXT PRIMARY KEY, source_type TEXT, source_ref TEXT, quote TEXT,
@@ -142,9 +142,17 @@ def open_hub(path: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+# 已有库补列（CREATE TABLE IF NOT EXISTS 不会给老表加新列）
+OPS_MIGRATIONS = [("comments", "collected_at", "TEXT")]
+
+
 def open_ops(path: Path | None = None) -> sqlite3.Connection:
     conn = connect(path or ops_db_path())
     conn.executescript(OPS_DDL)
+    for table, col, typ in OPS_MIGRATIONS:
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if col not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
     return conn
 
 

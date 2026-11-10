@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import logging
 import re
 import threading
 from contextlib import contextmanager
@@ -19,6 +20,8 @@ from ..ids import new_id
 from ..notifier import Notifier, build_notifier
 from ..notifier.render import render_card, render_card_batch, short_code
 from ..timeutil import in_window, iso, now, parse_duration, parse_iso, today_start, window_end
+
+log = logging.getLogger("hub")
 
 ACTIVE = ("leased",)
 INTERNAL_TYPES = {"decision.made", "decision.note", "agent.unavailable"}
@@ -338,10 +341,12 @@ class Hub:
         return chain
 
     # ------------------------------------------------------------------ 领任务
-    def lease(self, worker: str, agents: list[str] | None = None, wait: float = 0) -> dict | None:
+    def lease(self, worker: str, agents: list[str] | None = None, wait: float = 0, alive=None) -> dict | None:
         deadline = now().timestamp() + max(0.0, wait)
         with self.cond:
             while True:
+                if alive is not None and not alive():
+                    return None  # 等待期间接单程序已断开：不要把任务派给一个死连接
                 got = self._try_lease(worker, agents)
                 if got:
                     return got
@@ -419,6 +424,15 @@ class Hub:
         row = self.q1(f"SELECT 1 FROM tasks WHERE state IN ('queued','leased') AND created_at<=? AND id<>?"
                       f" AND rule IN ({','.join('?' * len(names))}) LIMIT 1", (t["created_at"], t["id"], *names))
         return row is not None
+
+    def unlease(self, tid: str, *, reason: str = "") -> None:
+        """派出但对方没收到的任务：放回队列，不算一次尝试、不算租约丢失。"""
+        with self.tx() as c:
+            c.execute("UPDATE tasks SET state='queued', lease_owner=NULL, lease_until=NULL,"
+                      " attempts=MAX(attempts-1, 0), agent=NULL, updated_at=? WHERE id=? AND state='leased'", (iso(), tid))
+        log.info("任务 %s 放回队列：%s", tid, reason)
+        with self.lock:
+            self.cond.notify_all()
 
     def _lease_seconds(self) -> int:
         return int((self.cfg.get("hub") or {}).get("lease_seconds", 120))
