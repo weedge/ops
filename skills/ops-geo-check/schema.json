@@ -1,0 +1,54 @@
+{
+  "description": "GEO 检查",
+  "required": [
+    "results"
+  ],
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "assistant",
+          "question",
+          "mentioned"
+        ],
+        "properties": {
+          "assistant": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "mentioned": {
+            "type": "boolean"
+          },
+          "rank": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "screenshot": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

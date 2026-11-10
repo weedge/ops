@@ -1,0 +1,140 @@
+# Agent 启动方式、能力、并发、降级链与全局策略（设计 03 / 附录 A）。
+# 机器相关、含内网地址或账号 ID 的配置写在 ~/popto-ops-data/local.yaml（不进 git），
+# 会按同名键深度覆盖本文件。
+
+hub:
+  host: 127.0.0.1
+  port: 8787
+  lease_seconds: 120          # 租约 2 分钟，续租失败任务回到队列
+  long_poll_seconds: 50       # opsd 单次最长等 50 秒
+  max_lease_losses: 3         # 同一任务丢租约超过 3 次即判失败（防止崩溃循环）
+
+worker:
+  name: mac-main
+  max_parallel: 6             # opsd 同时运行的任务上限（每个 Agent 另有并发上限）
+  renew_seconds: 30
+  proxy_probe_interval: 10m
+  proxy_retry_interval: 5m
+
+# 自动化专用环境：不用 ~/claude.sh 这类全权限包装脚本，权限参数由 opsd 按 tools 档位传入。
+proxy: null                   # 在 local.yaml 填 "http://<内网代理>:3218"
+no_proxy: "localhost,127.0.0.1,192.168.0.0/16,10.0.0.0/8"
+path: "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+external_skill_dirs:          # Popto 现有产品 Skills，被 ops 规则直接引用，不复制
+  - "../skills"
+
+# Agent 通过本机包装脚本启动（与终端里 claude / codex / agy 别名一致），代理由包装脚本自己设置。
+# 包装脚本会加全权限参数；opsd 追加的档位参数实测能否收紧：
+#   claude：--disallowedTools 在 bypassPermissions 下仍生效 ✓
+#   codex ：exec -s read-only 覆盖包装脚本的 danger-full-access ✓
+#   claude：workspace / dev 档位 allowedTools 失效（bypass 下非白名单 Bash 也能跑），只剩禁用清单 △
+#   agy   ：--dangerously-skip-permissions 压过 --sandbox ✗
+# strict_tiers 里的档位绕开包装脚本、直调 strict_bin，代理取包装脚本里的 PROXY=（或 agents.<名>.proxy）。
+agents:
+  claude:
+    type: claude
+    bin: "~/claude.sh"
+    strict_bin: "~/.local/bin/claude"
+    strict_tiers: []          # 想让 workspace / dev 也严格按白名单：[workspace, browser, dev]
+    concurrency: 3
+    default_model: null       # null = 用 CLI 默认模型；规则里可用 model 覆盖
+    capabilities: [decide, write, classify, dev, review, ops, image, video_degraded]
+    structured_output: true   # 用 --json-schema 取 structured_output
+  codex:
+    type: codex
+    bin: "~/codex.sh"
+    concurrency: 2
+    capabilities: [review, ops, dev, write, classify, decide, image, browser, video_degraded]
+    structured_output: false  # --output-schema 要求严格 Schema，改用提示词 + opsd 校验
+  antigravity:
+    type: antigravity
+    bin: "~/agy.sh"
+    strict_bin: "~/.local/bin/agy"
+    strict_tiers: [readonly]  # 处理评论等不可信输入时必须真只读
+    concurrency: 2
+    capabilities: [video, image, browser, write, classify]
+    browser_profile: "~/popto-ops-data/browser-profiles/agent-browse"
+  workbuddy:
+    type: inbox               # 无可用命令行，走收件箱 / 发件箱
+    inbox: "~/popto-ops-data/workbuddy-inbox"
+    outbox: "~/popto-ops-data/workbuddy-outbox"
+    max_wait: 6h
+    concurrency: 1
+    capabilities: [write, classify, video_degraded, image]
+  script:
+    type: script              # 确定性脚本（采集器 / 执行器），不调用大模型
+    concurrency: 4
+    capabilities: [script]
+
+fallback_chains:
+  decide:   [claude, codex]
+  write:    [claude, codex, antigravity, workbuddy]
+  classify: [claude, codex, antigravity, workbuddy]
+  dev:      [claude, codex]
+  review:   [codex, claude]   # 生产者与审查者不能相同，由中台强制
+  ops:      [codex, claude]
+  video:    [antigravity, claude, codex, workbuddy]   # 非 antigravity 时先抽帧 + 转写
+  image:    [antigravity, claude, codex, workbuddy]
+  browser:  [antigravity, codex]
+  script:   [script]
+
+circuit_breaker:
+  quota_patterns: ["usage limit", "rate limit", "rate_limit", "429", "quota", "credit balance"]
+  auth_patterns: ["unauthorized", "401", "please log in", "not logged in", "invalid api key", "/login"]
+  network_patterns: ["econnrefused", "connection refused", "proxy error", "network is unreachable", "could not resolve host", "connect timeout", "etimedout"]
+  quota_cooldown: 60m
+  auth_cooldown: 6h
+  timeout_strikes: 3
+  timeout_cooldown: 30m
+  probe_interval: 10m
+
+# P2 / P3 任务在 Claude 周用量超线时改由 Codex 主跑（03 §3.3）。用量由 opsctl agents usage 登记。
+usage_policy:
+  claude:
+    p2_threshold: 0.7
+    p3_threshold: 0.5
+
+budgets:                      # 单日上限
+  popto_credits: 200
+  tikhub_requests: 2000
+  redfox_requests: 500
+
+quiet_hours: "22:30-08:00"
+max_cards_per_day: 10
+max_tell_always_rules: 4
+card_default_ttl: 24h
+alert_after_unavailable: 2h
+
+notifier:
+  adapter: console            # console | file | dingtalk | lark；正式运行在 local.yaml 改成 dingtalk
+  bot_name: 兔管家
+  dingtalk:
+    identity: user            # user | bot（bot 需 robot_code）
+    chat_id: null             # 运营群 openConversationId（local.yaml）
+    user: null                # 或发给个人：userId
+    robot_code: null
+    approvers: []             # 允许批红的 openDingTalkId（群消息）和 userId（卡片回调）；不认昵称；为空时只接受 opsctl decide
+    at_on_alert: []
+  lark:
+    chat_id: null
+
+# 需求打分（与 ops-weekly-review Skill 同一公式）：需求分 = Σ(意图强度 × 人群权重) × 价值系数 ÷ 成本
+# 入库时先算初始分，周报再按上下文调整。人群按关键词匹配信号的 persona。
+demand_scoring:
+  persona_weights:
+    金融: 1.5
+    保险: 1.5
+    MCN: 1.5
+    法律: 1.2
+    财税: 1.2
+    教育: 1.2
+    职场: 1.2
+    商业: 1.2
+  default_persona_weight: 1.0
+  value_factors:          # 需求 kind / 标题里出现关键词时的价值系数（取最大）
+    付费: 1.5
+    计费: 1.5
+    首条完成: 1.3
+    注册: 1.3
+  cost: {S: 1, M: 2, L: 4}

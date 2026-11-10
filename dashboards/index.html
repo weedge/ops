@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Popto 运营流水线</title>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --fg:#1d1d1f; --muted:#6b6b70; --line:#e4e4e7; --ok:#1f8a4c; --bad:#c2410c; --acc:#2563eb; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111214; --card:#1a1b1e; --fg:#ececee; --muted:#9a9aa2; --line:#2a2b30; --ok:#4ade80; --bad:#fb923c; --acc:#60a5fa; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system, "PingFang SC", sans-serif; }
+  main { max-width:1180px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:20px; margin:0 0 4px; } .sub { color:var(--muted); margin-bottom:20px; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-bottom:20px; }
+  .kpi, section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .kpi b { display:block; font-size:24px; font-variant-numeric:tabular-nums; } .kpi span { color:var(--muted); font-size:12px; }
+  section { margin-bottom:16px; overflow-x:auto; } h2 { font-size:15px; margin:0 0 10px; }
+  table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:500; font-size:12px; } td.wrap { white-space:normal; }
+  .bar { height:8px; background:var(--acc); border-radius:4px; display:inline-block; vertical-align:middle; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .empty { color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Popto 运营流水线</h1>
+  <div class="sub" id="sub"></div>
+  <div class="kpis" id="kpis"></div>
+  <section><h2>各规则任务（近 7 天）</h2><div id="tasks"></div></section>
+  <section><h2>Agent 运行</h2><div id="runs"></div></section>
+  <section><h2>卡片</h2><div id="cards"></div></section>
+  <section><h2>事件量</h2><div id="events"></div></section>
+  <section><h2>失败任务</h2><div id="failures"></div></section>
+  <section><h2>自有内容最新数据</h2><div id="posts"></div></section>
+  <section><h2>渠道漏斗</h2><div id="funnel"></div></section>
+</main>
+<script>
+const D = /*__DATA__*/null;
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function table(el, rows, cols) {
+  const box = document.getElementById(el);
+  if (!rows || !rows.length) { box.innerHTML = '<div class="empty">暂无数据</div>'; return; }
+  box.innerHTML = "<table><tr>" + cols.map(c => `<th>${c[1]}</th>`).join("") + "</tr>" +
+    rows.map(r => "<tr>" + cols.map(c => `<td class="${c[2]||''}">${c[3] ? c[3](r) : esc(r[c[0]])}</td>`).join("") + "</tr>").join("") + "</table>";
+}
+if (!D) { document.getElementById("sub").textContent = "没有数据：请用 opsctl dashboard 生成。"; }
+else {
+  document.getElementById("sub").textContent = `生成于 ${D.generated_at} · ${D.window}`;
+  const k = D.kpi, pct = v => v == null ? "—" : (v * 100).toFixed(0) + "%";
+  document.getElementById("kpis").innerHTML = [
+    ["事件自动闭环率", pct(k.auto_close_rate), "目标 ≥ 80%"],
+    ["每天卡片数", k.cards_per_day, "目标 ≤ 10"],
+    ["卡片平均处理", k.avg_decision_sec == null ? "—" : k.avg_decision_sec + " 秒", "目标 ≤ 30 秒"],
+    ["Agent 运行成功率", pct(k.run_success_rate), "目标 ≥ 90%"],
+    ["降级次数", k.fallback_runs, "只做观察"],
+  ].map(x => `<div class="kpi"><span>${x[0]}</span><b>${x[1]}</b><span>${x[2]}</span></div>`).join("");
+  const max = Math.max(1, ...D.tasks.map(t => t.n));
+  table("tasks", D.tasks, [["rule","规则"],["state","状态"],["n","数量","",r => `<span class="bar" style="width:${Math.round(r.n/max*120)}px"></span> ${r.n}`]]);
+  table("runs", D.runs, [["agent","Agent"],["status","结果","",r => `<span class="${r.status==='ok'?'ok':'bad'}">${esc(r.status)}</span>`],["is_fallback","降级","",r => r.is_fallback ? "是" : ""],["n","次数"],["avg_s","平均秒"],["cost","费用 $"]]);
+  table("cards", D.cards, [["seq","编号","",r => "C" + r.seq],["title","标题","wrap"],["status","状态"],["choice","选择"],["decided_by","批准人"]]);
+  table("events", D.events, [["type","类型"],["n","数量"]]);
+  table("failures", D.failures, [["id","任务"],["rule","规则"],["agent","Agent"],["error","原因","wrap"],["updated_at","时间"]]);
+  table("posts", D.posts, [["platform","平台"],["title","标题","wrap"],["checkpoint","节点"],["views","播放"],["likes","赞"],["comments","评"],["shares","转"],["favorites","藏"]]);
+  table("funnel", D.funnel, [["date","日期"],["clicks","点击"],["reg","注册"],["first_done","首条完成"],["paid","付费"]]);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+[project]
+name = "popto-ops"
+version = "0.1.0"
+description = "Popto 产品运营本地多 Agent 自动化：事件中台 + 接单程序 + 批奏折"
+requires-python = ">=3.11"
+dependencies = [
+  "pyyaml>=6",
+  "jsonschema>=4",
+]
+
+[project.scripts]
+opsctl = "popto_ops.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["popto_ops"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

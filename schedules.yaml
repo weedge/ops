@@ -1,0 +1,14 @@
+# 定时事件（Asia/Shanghai）。中台每分钟检查一次，机器睡眠期间错过的会在醒来后补发最近一次。
+# at: "HH:MM" 每天；"MON 09:00" 每周；every: "30m" / "1h" 按间隔（从 0 点对齐）。
+# max_late：错过超过这么久就不补（默认 12h）。requires：该配置项（agents.yaml / local.yaml 的点路径）为空时不触发。
+- { type: cron.collect_metrics,    every: "30m" }
+- { type: cron.funnel_export,      at: "06:40" }
+- { type: cron.daily_brief,        at: "08:30" }
+- { type: cron.social_listening,   at: "14:00" }
+- { type: cron.publish_batch_card, at: "17:00", max_late: "3h" }
+- { type: cron.comment_collect,    every: "1h" }
+- { type: cron.weekly_review,      at: "MON 09:00" }
+- { type: cron.geo_check,          at: "WED 10:00" }
+- { type: cron.topic_planning,     at: "FRI 15:00" }
+- { type: cron.weekly_cleanup,     at: "SUN 10:00" }
+- { type: cron.ci_poll,            every: "30m", requires: ci.projects }  # 兜底：开发任务推送后 opsd 会直接触发审查；人手推的修改最多晚 30 分钟被发现
