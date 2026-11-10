@@ -225,7 +225,9 @@
     "timeout": "60m",
     "tell": "digest",
     "tools": "workspace",
-    "credits_per_run": 24
+    "credits_per_run": 24,
+    "enabled": false,
+    "note": "2026-11-10 停用：不再生产数字人口播视频（决策 D-20261110-01），后续可能改成混剪，届时换成混剪 Skill 再启用。"
   },
   {
     "name": "视频质检",
@@ -296,6 +298,29 @@
     "tell": "never"
   },
   {
+    "name": "自动发布登录检查",
+    "when": {
+      "source": "cron",
+      "types": [
+        "cron.publish_login_check"
+      ]
+    },
+    "to": "script",
+    "capability": "script",
+    "priority": 1,
+    "command": [
+      "{python}",
+      "-m",
+      "popto_ops.executors.publishers",
+      "check"
+    ],
+    "group": "publish-login",
+    "parallel": 1,
+    "timeout": "10m",
+    "tell": "never",
+    "note": "17:00 发布卡片前检查创作者后台登录态，失效就提醒扫码"
+  },
+  {
     "name": "17:00 今晚待发布卡片",
     "when": {
       "source": "cron",
@@ -336,7 +361,7 @@
     ],
     "group": "publish:{subject}",
     "parallel": 2,
-    "timeout": "20m",
+    "timeout": "45m",
     "tell": "needed"
   },
   {

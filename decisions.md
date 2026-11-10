@@ -8,3 +8,9 @@
 - 日期：2026-11-09
 - 适用：ops-script-writing、ops-compliance-review、ops-comment-triage（回复草稿）
 - 来源：设计文档 08 §3.1 样例（上线前请人确认或删除）
+
+## D-20261110-01 不生产口播视频了，后续可能会调成混剪。
+- 原话：“不生产口播视频了，后续可能会调成混剪。”
+- 日期：2026-11-10
+- 适用：ops-topic-planning、ops-script-writing、ops-compliance-review、素材生产（规则已停用）、ops-video-qa
+- 来源：钉钉 / 终端对话（邬勇，2026-11-10）

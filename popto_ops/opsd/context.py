@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -212,8 +213,10 @@ class ContextBuilder:
                     media.mkdir(exist_ok=True)
                     dst = media / p.name
                     if not dst.exists():
+                        # 不用软链接：agy 无人值守时不跟随软链接读文件（即使目标目录已放行）。
+                        # 同一磁盘用硬链接（不占空间），跨磁盘再复制。
                         try:
-                            dst.symlink_to(p)
+                            os.link(p.resolve(), dst)
                         except OSError:
                             shutil.copy2(p, dst)
                     self.files.append((f"media/{p.name}", "待检查的素材"))

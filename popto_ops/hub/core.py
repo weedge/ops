@@ -301,6 +301,8 @@ class Hub:
             self.enqueue_notice("alert", f"{agent} 登录失效，需要重新登录",
                                 f"{agent} 返回认证错误，已熔断。请在终端重新登录（例如 `! {agent}`），完成后运行 `opsctl agents reset {agent}`。\n\n```\n{(detail or '')[:400]}\n```",
                                 priority=0, ref=f"auth:{agent}:{today_start().date()}", dedup=True)
+        elif kind == "network":
+            self.set_agent_state(agent, "open", open_for=cb.get("network_cooldown", "5m"), error=(detail or "")[-300:])
         elif kind == "timeout":
             with self.tx() as c:
                 c.execute("INSERT OR IGNORE INTO agent_state(agent,state,updated_at) VALUES (?, 'closed', ?)", (agent, iso()))
@@ -586,6 +588,14 @@ class Hub:
                       (cid, seq, card.get("kind"), card.get("title"), _j(card), _j(task_ids), priority, iso(), expires))
             c.execute("INSERT INTO outbox(kind,priority,title,card_id,created_at,status) VALUES ('card',?,?,?,?, 'pending')",
                       (priority, card.get("title"), cid, iso()))
+            # 卡片里的本机文件（周报、PRD 等）随卡片发进群：手机上点不开本机路径
+            from ..notifier.render import local_file
+
+            for ln in card.get("links") or []:
+                lp = local_file(ln)
+                if lp:
+                    c.execute("INSERT INTO outbox(kind,priority,title,body,card_id,created_at,status,ref)"
+                              " VALUES ('file',?,?,?,?,?, 'pending', ?)", (priority, lp.name, str(lp), cid, iso(), f"cardfile:{cid}"))
         return cid
 
     def find_card(self, ref: str) -> dict | None:
@@ -618,13 +628,25 @@ class Hub:
                 return {"ok": False, "error": f"选项「{opt.get('label')}」需要写原因"}
             key = opt.get("key") if opt else "expired"
             status = "expired" if expired else "decided"
+            # 部分批准：选项的 emit 与明细一一对应时，「C4 1 3,5」只发第 3、5 条
+            emits = list((opt or {}).get("emit") or [])
+            picked = None
+            m = re.fullmatch(r"\s*#?(\d+(?:\s*[,，、\s]\s*#?\d+)*)\s*", reason or "")
+            if m and len(emits) > 1 and len(emits) == len(payload.get("items") or []):
+                picked = sorted({int(x) for x in re.findall(r"\d+", m.group(1))})
+                bad = [i for i in picked if not 1 <= i <= len(emits)]
+                if bad:
+                    return {"ok": False, "error": f"明细序号超出范围：{bad}（共 {len(emits)} 条）"}
+                emits = [emits[i - 1] for i in picked]
+                reason = None
             with self.tx() as c:
                 c.execute("UPDATE cards SET status=?, decided_at=?, decided_by=?, choice=?, reason=? WHERE id=?",
-                          (status, iso(), by, key, reason, card["id"]))
+                          (status, iso(), by, key,
+                           reason if picked is None else "只批明细第 " + "、".join(map(str, picked)) + " 条", card["id"]))
                 c.execute("UPDATE outbox SET status='cancelled' WHERE card_id=? AND status='pending'", (card["id"],))
             ctx = {"card_id": card["id"], "choice": key, "reason": reason, "decided_by": by}
             emitted = []
-            for e in (opt or {}).get("emit") or []:
+            for e in emits:
                 d = dict(e.get("data") or {})
                 d.update(ctx)
                 r = self.ingest({"source": "dingtalk" if by != "timeout" else "hub", "type": e["type"],
@@ -647,13 +669,15 @@ class Hub:
             # 回执：让人在群里看到批红已生效、接下来会发生什么
             nxt = [r.get("rule") for r in emitted if r.get("routed") == "task" and r.get("rule")]
             head = (f"C{card['seq']} 超时，按「{label}」处理" if expired
-                    else f"已收到 C{card['seq']} →「{label}」")
+                    else f"已收到 C{card['seq']} →「{label}」" + (f"（只批第 {'、'.join(map(str, picked))} 条）" if picked else ""))
             lines = [f"✅ {head}", "", f"卡片：{payload.get('title') or card['id']}"]
             if reason:
                 lines.append(f"原因：{reason}")
             if entry:
                 lines.append("已记入决策档案")
-            lines.append("接下来：" + ("、".join(nxt) + "（自动进行，有需要拍板的会再发卡片）" if nxt else "无后续动作"))
+            counted = {n: nxt.count(n) for n in dict.fromkeys(nxt)}
+            nxt_text = "、".join(n + (f" ×{c}" if c > 1 else "") for n, c in counted.items())
+            lines.append("接下来：" + (nxt_text + "（自动进行，有需要拍板的会再发卡片）" if nxt else "无后续动作"))
             self.enqueue_notice("message", head, "\n".join(lines), priority=1, ref=f"ack:{card['id']}", dedup=True)
             return {"ok": True, "card": card["id"], "choice": key, "emitted": emitted, "entry": entry}
 
@@ -717,6 +741,23 @@ class Hub:
                                   " WHERE id=?", (iso(wake), p["id"]))
                     deferred += 1
                     continue
+                if p["kind"] == "file":
+                    # 卡片附件要等卡片本身发出去之后再发
+                    if p["card_id"] and not self.q1("SELECT 1 FROM outbox WHERE card_id=? AND kind IN ('card','card_batch')"
+                                                    " AND status='sent'", (p["card_id"],)):
+                        card = self.q1("SELECT status FROM cards WHERE id=?", (p["card_id"],))
+                        if card and card["status"] in ("pending",):
+                            continue
+                    res = self._send_file(p["body"] or "", p["title"], prio, p["ref"])
+                    with self.tx() as c:
+                        if res.get("ok"):
+                            c.execute("UPDATE outbox SET status='sent', sent_at=?, error=NULL WHERE id=?", (iso(), p["id"]))
+                        else:
+                            c.execute("UPDATE outbox SET error=?, send_after=? WHERE id=?",
+                                      (res.get("error"), iso(now() + timedelta(minutes=5)), p["id"]))
+                    sent += bool(res.get("ok"))
+                    failed += not res.get("ok")
+                    continue
                 if p["kind"] == "card":
                     card = self.q1("SELECT * FROM cards WHERE id=?", (p["card_id"],))
                     if not card or card["status"] != "pending":
@@ -747,6 +788,12 @@ class Hub:
                 else:
                     failed += 1
         return {"sent": sent, "deferred": deferred, "failed": failed}
+
+    def _send_file(self, path: str, title: str | None, prio: int, ref: str | None) -> dict:
+        try:
+            return self.notifier.send_file(Path(path), title=title, priority=prio, ref=ref)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)[:500]}
 
     def _send(self, kind: str, title: str, body: str, prio: int, ref: str | None) -> dict:
         try:

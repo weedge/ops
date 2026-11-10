@@ -383,3 +383,60 @@ def test_decision_sends_ack_message(hub):
     assert ack and f"已收到 C{seq}" in ack["title"] and "需求批准 → PRD" in ack["body"]
     hub.decide(f"C{seq}", "1", by="u1")                     # 重复批红不重复回执
     assert hub.q1("SELECT COUNT(*) AS n FROM outbox WHERE ref LIKE 'ack:%'")["n"] == 1
+
+
+def test_partial_approval_picks_items(hub):
+    at("2026-11-10 10:00")
+    hub.ingest({"source": "cron", "type": "cron.daily_brief", "dedup_key": "b"})
+    t = hub.lease("w", None)
+    items = [{"title": f"选题 {i}"} for i in range(1, 6)]
+    card = {"title": "下周日历", "proposal": "全部通过", "items": items, "options": [
+        {"key": "all", "label": "全部通过",
+         "emit": [{"type": "content.topic.approved", "subject": f"content:c{i}"} for i in range(1, 6)]},
+        {"key": "no", "label": "不排", "require_reason": True}]}
+    run(hub, t, status="needs_decision", needs_decision=True, decision_card=card, message_markdown="日报正文" * 5)
+    seq = hub.q1("SELECT seq FROM cards")["seq"]
+    assert not hub.decide(f"C{seq}", "1", by="u", reason="9")["ok"]          # 越界
+    r = hub.decide(f"C{seq}", "1", by="u", reason="2，4")
+    assert r["ok"] and len(r["emitted"]) == 2
+    subj = [e["subject"] for e in hub.q("SELECT subject FROM events WHERE type='content.topic.approved'")]
+    assert sorted(subj) == ["content:c2", "content:c4"]
+    ack = hub.q1("SELECT title FROM outbox WHERE ref LIKE 'ack:%'")["title"]
+    assert "只批第 2、4 条" in ack
+
+
+def test_render_shows_partial_hint():
+    from popto_ops.notifier.render import render_card
+    card = {"title": "t", "proposal": "p", "items": [{"title": "a"}, {"title": "b"}],
+            "options": [{"key": "all", "label": "全部", "emit": [{"type": "x.y"}, {"type": "x.y"}]},
+                        {"key": "no", "label": "不"}]}
+    assert "「C4 1 3,5」" in render_card(card, 4, "2026-11-11T13:00:00+08:00")[1]
+
+
+def test_network_error_waits_instead_of_failing(hub):
+    """审查只能给 Codex：Codex 网络错误时任务回队列、Codex 冷却，冷却后再接，不判失败。"""
+    at("2026-11-10 10:00")
+    hub.ingest({"source": "pipeline", "type": "content.script.ready", "subject": "content:c1", "dedup_key": "s1",
+                "data": {"producer": "claude"}})
+    t = hub.lease("w", None)
+    assert t["agent"] == "codex"
+    r = fail(hub, t, kind="network", detail="workspace routing discovery timed out")
+    assert r["state"] == "queued"
+    assert hub.lease("w", None) is None                     # 冷却中
+    at("2026-11-10 10:06")
+    t2 = hub.lease("w", None)
+    assert t2 and t2["agent"] == "codex"
+
+
+def test_card_local_file_sent_after_card(hub, home):
+    from popto_ops import paths
+    at("2026-11-10 10:00")
+    f = paths.ops_data() / "runs" / "weekly.md"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("周报正文")
+    cid = hub.create_card({"title": "周报", "proposal": "看", "links": ["runs/weekly.md"],
+                           "options": [{"key": "a", "label": "好"}, {"key": "b", "label": "不"}]}, [])
+    rows = hub.q("SELECT kind, body, status FROM outbox WHERE card_id=? ORDER BY id", (cid,))
+    assert [r["kind"] for r in rows] == ["card", "file"] and rows[1]["body"] == str(f)
+    hub.flush_outbox()
+    assert [r["status"] for r in hub.q("SELECT status FROM outbox WHERE card_id=? ORDER BY id", (cid,))] == ["sent", "sent"]

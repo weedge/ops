@@ -18,6 +18,11 @@ class Notifier:
     def send(self, kind: str, title: str, body: str, *, priority: int = 2, ref: str | None = None) -> dict:
         raise NotImplementedError
 
+    def send_file(self, path: Path, *, title: str | None = None, priority: int = 2, ref: str | None = None) -> dict:
+        """发一个本机文件（视频、封面、周报等）。默认实现只记一条文字，便于测试和影子运行。"""
+        return self.send("file", title or path.name, f"📎 文件：`{path}`（{path.stat().st_size // 1024} KB）",
+                         priority=priority, ref=ref)
+
 
 class ConsoleNotifier(Notifier):
     """开发 / 影子运行：打印并写 notify/console.log，不对外发送。"""
@@ -85,10 +90,12 @@ class DingTalkNotifier(Notifier):
         self.cfg = cfg or {}
         self.dws = dws_bin
 
-    def build_cmd(self, body: str) -> list[str]:
+    def build_cmd(self, body: str | None = None, *, file: str | None = None) -> list[str]:
+        """文字（--markdown）或文件（--file，工作目录内的相对路径）二选一。"""
         c = self.cfg
         identity = c.get("identity", "user")
-        cmd = [self.dws, "chat", "+messages-send", "--as", identity, "--markdown", body, "--yes", "-f", "json"]
+        content = ["--file", file] if file else ["--markdown", body or ""]
+        cmd = [self.dws, "chat", "+messages-send", "--as", identity, *content, "--yes", "-f", "json"]
         if identity == "bot":
             if not c.get("robot_code"):
                 raise RuntimeError("notifier.dingtalk.identity=bot 时必须配置 robot_code")
@@ -103,12 +110,20 @@ class DingTalkNotifier(Notifier):
             raise RuntimeError("notifier.dingtalk 未配置 chat_id / user / open_dingtalk_id（写在 ~/popto-ops-data/local.yaml）")
         return cmd
 
-    def send(self, kind, title, body, *, priority=2, ref=None):
-        if kind == "alert" and self.cfg.get("at_on_alert"):
-            body = body + "\n\n" + " ".join(f"@{x}" for x in self.cfg["at_on_alert"])
-        cmd = self.build_cmd(body)
-        for attempt in range(3):  # DNS / 超时这类瞬时网络错误：间隔几秒重试，不等 5 分钟后的下一轮
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    MAX_FILE_MB = 500
+
+    def send_file(self, path, *, title=None, priority=2, ref=None):
+        """以 --file 发到群里（dws 要求工作目录内的相对路径，所以在文件所在目录执行）。"""
+        path = Path(path)
+        if not path.is_file():
+            return {"ok": False, "error": f"文件不存在：{path}"}
+        if path.stat().st_size > self.MAX_FILE_MB * 1024 * 1024:
+            return {"ok": False, "error": f"文件超过 {self.MAX_FILE_MB} MB：{path}"}
+        return self._run(self.build_cmd(file=path.name), cwd=path.parent)
+
+    def _run(self, cmd: list[str], cwd: Path | None = None) -> dict:
+        for attempt in range(3):  # DNS / 超时这类瞬时网络错误：间隔几秒重试
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=str(cwd) if cwd else None)
             text = proc.stderr + proc.stdout
             if proc.returncode == 0 or not _TRANSIENT.search(text) or attempt == 2:
                 break
@@ -122,6 +137,11 @@ class DingTalkNotifier(Notifier):
         if isinstance(data, dict) and (data.get("success") is False or data.get("error")):
             return {"ok": False, "error": json.dumps(data, ensure_ascii=False)[-800:]}
         return {"ok": True, "message_id": _find_message_id(data)}
+
+    def send(self, kind, title, body, *, priority=2, ref=None):
+        if kind == "alert" and self.cfg.get("at_on_alert"):
+            body = body + "\n\n" + " ".join(f"@{x}" for x in self.cfg["at_on_alert"])
+        return self._run(self.build_cmd(body))
 
 
 class LarkNotifier(Notifier):

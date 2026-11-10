@@ -1,6 +1,7 @@
 import json
 
 from popto_ops import db, ingest
+from popto_ops.timeutil import iso
 from popto_ops.ci import gate
 from popto_ops.collectors import metrics
 from popto_ops.notifier.listener import handle_event, parse_command
@@ -331,3 +332,177 @@ def test_readonly_output_instruction_does_not_ask_to_write_files(tmp_path):
     md = build_input_md(lease, skill_name="s", skill_text="x", schema={}, ctx=Ctx(), agent="codex",
                         structured=False, run_dir=tmp_path)
     assert "output.json" in md
+
+
+def test_codex_routing_timeout_is_network(home):
+    from popto_ops import config
+    cb = config.load_agents_config(home)["circuit_breaker"]
+    text = '{"type":"error","message":"Reconnecting... 5/5 (workspace routing discovery timed out)"}'
+    assert breaker.classify(text, timed_out=False, cb=cb) == "network"
+
+
+def test_agy_readonly_settings_allow_reads_incl_symlink_targets(tmp_path):
+    import json as _j
+    from popto_ops.opsd.agents import AntigravityAdapter
+    outside = tmp_path / "content"
+    outside.mkdir()
+    (outside / "v.mp4").write_bytes(b"x")
+    run = tmp_path / "run"
+    (run / "media").mkdir(parents=True)
+    (run / "media" / "v.mp4").symlink_to(outside / "v.mp4")
+    spec = _spec(run, {"type": "antigravity", "bin": "/opt/agy.sh", "strict_bin": "/opt/agy", "strict_tiers": ["readonly"]},
+                 "readonly")
+    cmd = AntigravityAdapter().build_cmd(spec)
+    allow = _j.loads(cmd[cmd.index("--settings") + 1])["permissions"]["allow"]
+    assert f"read_file({run.resolve()}/**)" in allow and f"read_file({outside.resolve()}/**)" in allow
+    assert not any(a.startswith("write_file") for a in allow)
+
+
+def test_codex_failure_classified_from_events_not_stderr_noise(tmp_path):
+    from popto_ops.opsd.agents import CodexAdapter
+    fake = tmp_path / "codex.sh"
+    fake.write_text("#!/usr/bin/env python3\nimport sys, json\n"
+                    "print(json.dumps({'type': 'turn.failed', 'error': {'message': 'model refused: bad request'}}))\n"
+                    "sys.stderr.write('rmcp worker: error sending request for url (https://mcp.postman.com)\\n')\n")
+    fake.chmod(0o755)
+    r = CodexAdapter().run(_spec(tmp_path, {"type": "codex", "bin": str(fake)}, "readonly"), tmp_path / "a.log")
+    assert not r.ok and "bad request" in r.error_text and "postman" not in r.error_text
+
+
+def test_event_media_hardlinked_not_symlinked(home, tmp_path):
+    from popto_ops.opsd.context import ContextBuilder
+    src = tmp_path / "content" / "v.mp4"
+    src.parent.mkdir()
+    src.write_bytes(b"video")
+    run = tmp_path / "run"
+    run.mkdir()
+    ctx = ContextBuilder(None, run)
+    try:
+        ctx.p_event_media({}, [{"data": {"media_path": str(src)}}])
+    finally:
+        ctx.close()
+    dst = run / "media" / "v.mp4"
+    assert dst.exists() and not dst.is_symlink() and dst.read_bytes() == b"video"
+
+
+def test_platform_names_normalized(home):
+    from popto_ops import platforms
+    assert platforms.normalize("抖音") == "douyin" and platforms.normalize("B站") == "bilibili"
+    assert platforms.normalize("douyin") == "douyin" and platforms.label("抖音") == "抖音"
+    ops = db.open_ops()
+    pid = metrics.register_post(ops, {"platform": "抖音", "platform_post_id": "123", "title": "t"})
+    assert pid == "douyin_123"
+    assert ops.execute("SELECT platform FROM posts WHERE id=?", (pid,)).fetchone()[0] == "douyin"
+
+
+def test_manual_publish_message_has_copy_and_files(tmp_path):
+    from popto_ops.executors import publish
+    d = tmp_path / "pack"
+    d.mkdir()
+    (d / "video.mp4").write_bytes(b"v")
+    (d / "cover.jpg").write_bytes(b"c")
+    meta = {"is_test": True, "test_note": "联调", "media": {"video": "video.mp4", "cover": "cover.jpg"},
+            "per_platform": {"抖音": {"title": "下班路过面包店", "body": "三款新品", "topics": ["#面包店"],
+                                      "pinned_comment": "主页链接", "ai_label": True, "scheduled_at": "2026-11-10T19:00:00+08:00"}}}
+    p = {"id": "pk_x_douyin", "platform": "douyin", "title": "下班路过面包店", "content_id": "x", "pack_dir": str(d)}
+    text = publish._manual_instructions(p, meta)
+    for want in ("测试内容，不要真的发布", "三款新品", "#面包店", "置顶评论", "AI 生成内容", "19:00", "「cover.jpg」"):
+        assert want in text, want
+    assert "pack" not in text.split("素材")[0] or str(d) not in text      # 不再给本机目录
+    assert [f.name for f in publish._pack_files(p, meta)] == ["cover.jpg", "video.mp4"]
+
+
+def test_render_card_local_links(tmp_path, monkeypatch):
+    from popto_ops.notifier.render import render_card
+    monkeypatch.setenv("OPS_DATA", str(tmp_path))
+    (tmp_path / "runs").mkdir()
+    (tmp_path / "runs" / "weekly.md").write_text("周报")
+    card = {"title": "t", "proposal": "p", "options": [{"key": "a", "label": "A"}, {"key": "b", "label": "B"}],
+            "links": ["runs/weekly.md", str(tmp_path / "runs"), "https://x.example/mr/1"]}
+    body = render_card(card, 9, None)[1]
+    assert "见下一条文件「weekly.md」" in body and "[详情](https://x.example/mr/1)" in body
+    assert str(tmp_path / "runs") + "`" not in body and "详情：`" not in body
+
+
+def test_publish_run_modes(home, monkeypatch, tmp_path):
+    from popto_ops.executors import publish, publishers as pubs
+    ops = db.open_ops()
+    d = tmp_path / "pack"
+    d.mkdir()
+    (d / "video.mp4").write_bytes(b"v")
+    (d / "meta.json").write_text(json.dumps({"media": {"video": "video.mp4"},
+                                             "per_platform": {"抖音": {"title": "标题", "body": "正文"}}}, ensure_ascii=False))
+    for pid in ("pk_a_douyin", "pk_b_douyin"):
+        ops.execute("INSERT INTO publish_packs(id,content_id,platform,title,pack_dir,publish_mode,status) VALUES (?,?,?,?,?,?,?)",
+                    (pid, pid[3:4], "douyin", "标题", str(d), "semi_auto", "carded"))
+    ops.commit()
+    sent, emitted = [], {}
+
+    class Hub:
+        def notify(self, kind, title, body, **k):
+            sent.append((kind, title))
+            return {"ok": True}
+    monkeypatch.setattr(publish, "hub_client", lambda: Hub())
+    monkeypatch.setattr(publish, "emit_result", lambda summary, **k: emitted.update(summary=summary, **k))
+
+    def run_with(mode, result_or_exc, pack_id):
+        sent.clear()
+        monkeypatch.setattr(publish, "load_task", lambda: {"task": {"id": "t"}, "events": [
+            {"data": {"pack_id": pack_id}, "received_at": iso()}]})
+        monkeypatch.setattr("popto_ops.config.load_agents_config", lambda *a, **k: {"publishers": {"douyin": {"mode": mode}}})
+
+        def fake_run(p, meta, *, dry_run, headless=True):
+            assert dry_run == (mode == "dry_run")
+            if isinstance(result_or_exc, Exception):
+                raise result_or_exc
+            return result_or_exc
+        monkeypatch.setattr(pubs, "run", fake_run)
+        publish.cmd_run()
+
+    # 试运行：截图 + 仍推人工发布
+    shot = tmp_path / "s.png"
+    shot.write_bytes(b"p")
+    run_with("dry_run", pubs.PublishResult(ok=True, dry_run=True, screenshots=[str(shot)], notes=["已填好"]), "pk_a_douyin")
+    kinds = [k for k, _ in sent]
+    assert kinds[:2] == ["message", "file"] and any("请手动发布" in t for _, t in sent)
+    # 真发布成功：登记作品并发后续事件
+    run_with("live", pubs.PublishResult(ok=True, dry_run=False, url="https://www.douyin.com/video/42",
+                                        platform_post_id="42"), "pk_b_douyin")
+    assert ops.execute("SELECT status FROM publish_packs WHERE id='pk_b_douyin'").fetchone()[0] == "published"
+    assert emitted["follow_up_events"][0]["type"] == "social.post.published"
+    assert not any("请手动发布" in t for _, t in sent)
+
+
+def test_publish_live_failure_falls_back_to_manual(home, monkeypatch, tmp_path):
+    from popto_ops.executors import publish, publishers as pubs
+    ops = db.open_ops()
+    ops.execute("INSERT INTO publish_packs(id,content_id,platform,title,pack_dir,publish_mode,status) VALUES "
+                "('pk_c_douyin','c','douyin','t',?, 'semi_auto','carded')", (str(tmp_path),))
+    ops.commit()
+    sent = []
+    monkeypatch.setattr(publish, "hub_client", lambda: type("H", (), {"notify": lambda self, k, t, b, **kw: sent.append((k, t))})())
+    monkeypatch.setattr(publish, "emit_result", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "load_task", lambda: {"task": {"id": "t"}, "events": [
+        {"data": {"pack_id": "pk_c_douyin"}, "received_at": iso()}]})
+    monkeypatch.setattr("popto_ops.config.load_agents_config", lambda *a, **k: {"publishers": {"douyin": {"mode": "live"}}})
+
+    def boom(*a, **k):
+        raise pubs.NotLoggedIn("抖音登录已失效")
+    monkeypatch.setattr(pubs, "run", boom)
+    publish.cmd_run()
+    assert sent[0][0] == "alert" and "登录失效" in sent[0][1] and any("请手动发布" in t for _, t in sent)
+
+
+def test_test_content_never_live():
+    from popto_ops.executors.publish import _publisher_mode
+    cfg = {"publishers": {"douyin": {"mode": "live"}}}
+    assert _publisher_mode(cfg, "douyin", {"is_test": True}) == "dry_run"
+    assert _publisher_mode(cfg, "douyin", {}) == "live"
+    assert _publisher_mode({}, "douyin", {}) == "off"
+
+
+def test_friendly_publish_errors():
+    from popto_ops.executors.publishers import PublishError, friendly_error
+    raw = Exception('Locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for get_by_role("button", name="发表视频")')
+    assert friendly_error(raw) == "等「发表视频」超时（多半是网络慢或页面改版）"
+    assert friendly_error(PublishError("视频上传失败")) == "视频上传失败"

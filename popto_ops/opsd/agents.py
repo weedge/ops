@@ -244,13 +244,33 @@ class CodexAdapter(Adapter):
             elif t == "error":  # 含 "Reconnecting... 2/5" 这类过程提示，只有最终没完成时才算失败
                 errors.append(json.dumps(ev, ensure_ascii=False)[:500])
         if rc != 0 or failed or not completed:
-            res.error_text = "\n".join(errors) + "\n" + err[-1500:]
+            # 只用 Codex 自己报的错误事件归类；stderr 里常有无关噪音（如 MCP 服务连不上），没有错误事件时才看它
+            res.error_text = "\n".join(errors[-6:]) if errors else err[-1500:]
             return res
         text = last.read_text(errors="replace") if last.exists() else ""
         output = _read_output_file(spec.run_dir) or extract_json(text)
         res.output = output if isinstance(output, dict) else None
         res.ok = True
         return res
+
+
+def readonly_allow_rules(spec: RunSpec) -> list[str]:
+    """运行目录、附加目录，以及运行目录里软链接指向的真实目录（agy 按真实路径判权限）。"""
+    dirs: list[Path] = [spec.run_dir.resolve(), *[Path(d).resolve() for d in spec.extra_dirs]]
+    try:
+        for p in spec.run_dir.rglob("*"):
+            if p.is_symlink():
+                t = p.resolve()
+                dirs.append(t if t.is_dir() else t.parent)
+    except OSError:
+        pass
+    seen, rules = set(), []
+    for d in dirs:
+        if str(d) in seen:
+            continue
+        seen.add(str(d))
+        rules += [f"read_file({d}/**)", f"list_dir({d}/**)", f"list_dir({d})"]
+    return rules
 
 
 class AntigravityAdapter(Adapter):
@@ -266,6 +286,8 @@ class AntigravityAdapter(Adapter):
             cmd += ["--model", spec.model or c["default_model"]]
         if spec.tools == "readonly":
             cmd.append("--sandbox")
+            # 无人值守时 agy 连读文件都会被拒（且一被拒就整次不输出）：只放行读 / 列目录，写仍然拦住
+            cmd += ["--settings", json.dumps({"permissions": {"allow": readonly_allow_rules(spec)}}, ensure_ascii=False)]
         elif not b.endswith(".sh"):  # 包装脚本自己已带
             cmd.append("--dangerously-skip-permissions")
         if c.get("structured_output", True):

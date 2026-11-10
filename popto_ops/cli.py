@@ -221,6 +221,37 @@ def cmd_metrics(a) -> None:
     sys.exit(mmain(["import", a.csv]))
 
 
+def cmd_publish(a) -> None:
+    from .executors import publishers as pubs
+
+    if a.action == "try":
+        from . import db
+        from .executors.publish import _pack_meta
+
+        ops = db.open_ops()
+        row = ops.execute("SELECT * FROM publish_packs WHERE id=?", (a.platform,)).fetchone()
+        if not row:
+            sys.exit(f"找不到发布包 {a.platform}")
+        p = dict(row)
+        res = pubs.run(p, _pack_meta(p["pack_dir"]), dry_run=not a.live, headless=not a.headed)
+        print(("✓ " if res.ok else "✗ ") + ("试运行" if res.dry_run else "发布") + "：" + "；".join(res.notes))
+        for s in res.screenshots:
+            print("  截图", s)
+        if res.url:
+            print("  链接", res.url)
+        return
+    targets = list(pubs.PLATFORMS) if a.platform == "all" else [a.platform]
+    for pf in targets:
+        label = pubs.PLATFORMS[pf]["label"]
+        if a.action == "login":
+            print(f"{label}：已打开 Chrome，请扫码登录（5 分钟内）……")
+            ok = pubs.login(pf)
+            print(f"{label}：{'登录成功，登录态已保存' if ok else '超时未登录'}")
+        else:
+            ok, url = pubs.check_login(pf)
+            print(f"{'✓' if ok else '✗'} {label:<4} {'已登录' if ok else '未登录（opsctl publish login ' + pf + '）'}  {url}")
+
+
 def cmd_dashboard(a) -> None:
     from .dashboard import build
 
@@ -350,6 +381,12 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("action", choices=["import"])
     s.add_argument("csv")
     s.set_defaults(fn=cmd_metrics)
+    s = sp.add_parser("publish", help="自动发布：login 扫码登录 / check 检查登录态 / try <发布包> 试运行")
+    s.add_argument("action", choices=["login", "check", "try"])
+    s.add_argument("platform", help="douyin / wechat_channels / xiaohongshu / all；try 时填发布包 ID")
+    s.add_argument("--live", action="store_true", help="try 时真的点发布（默认只试运行）")
+    s.add_argument("--headed", action="store_true", help="显示浏览器窗口")
+    s.set_defaults(fn=cmd_publish)
     s = sp.add_parser("digest")
     s.add_argument("--hours", type=int, default=24)
     s.set_defaults(fn=cmd_digest)

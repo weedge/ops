@@ -82,7 +82,9 @@ fallback_chains:
 circuit_breaker:
   quota_patterns: ["usage limit", "rate limit", "rate_limit", "429", "quota", "credit balance"]
   auth_patterns: ["unauthorized", "401", "please log in", "not logged in", "invalid api key", "/login"]
-  network_patterns: ["econnrefused", "connection refused", "proxy error", "network is unreachable", "could not resolve host", "connect timeout", "etimedout"]
+  network_patterns: ["econnrefused", "connection refused", "proxy error", "network is unreachable", "could not resolve host", "connect timeout", "etimedout",
+                     "routing discovery timed out", "error sending request", "i/o timeout", "stream disconnected", "tls handshake timeout"]
+  network_cooldown: 5m          # 网络错误：该 Agent 冷却一会儿，任务回队列等待，不记为失败
   quota_cooldown: 60m
   auth_cooldown: 6h
   timeout_strikes: 3
@@ -138,3 +140,11 @@ demand_scoring:
     首条完成: 1.3
     注册: 1.3
   cost: {S: 1, M: 2, L: 4}
+
+# 创作者后台自动发布（Playwright + 本机 Chrome，登录：opsctl publish login <平台>）
+# mode：off 人工发布 / dry_run 自动填好停在发布前并截图（仍推人工发布）/ live 真发布（失败自动转人工）
+# 测试内容（meta.is_test）最多 dry_run。
+publishers:
+  douyin: {mode: dry_run}
+  wechat_channels: {mode: dry_run}
+  xiaohongshu: {mode: dry_run}

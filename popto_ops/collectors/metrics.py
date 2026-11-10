@@ -12,7 +12,7 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
-from .. import db
+from .. import db, platforms
 from ..config import load_agents_config
 from ..scriptkit import emit_result, hub_client, load_task
 from ..timeutil import iso, now, parse_iso
@@ -25,7 +25,7 @@ GIVE_UP_AFTER = timedelta(hours=12)
 
 
 def register_post(ops, d: dict) -> str:
-    platform = d["platform"]
+    platform = platforms.normalize(d["platform"])
     ppid = str(d.get("platform_post_id") or d.get("url") or "")
     pid = d.get("post_id") or f"{platform}_{ppid}"[:80]
     published = d.get("published_at") or iso()

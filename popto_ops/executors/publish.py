@@ -2,12 +2,12 @@
 
 python -m popto_ops.executors.publish register     # content.pack.ready → 登记发布包
 python -m popto_ops.executors.publish batch-card   # 17:00 → 今晚待发布 N 条，一张卡片
-python -m popto_ops.executors.publish run          # content.publish.approved → 执行（一期全部半自动）
+python -m popto_ops.executors.publish run          # content.publish.approved → 执行（按平台 off / dry_run / live）
 python -m popto_ops.executors.publish record       # content.published.manual → 人发完后补登记
 
 一期所有平台按“半自动”执行：执行器把发布包整理好推给人，人在手机 / 后台发完后回复
 「已发 <发布包ID> <链接>」（或 opsctl published），执行器补登记并排定数据采集。
-自动发布适配器（Popto 发布中心 / socialpy）在 AUTO_ADAPTERS 里登记后才会启用。
+自动发布：executors/publishers/（Playwright 驱动创作者后台），按 agents.yaml 的 publishers.<平台>.mode 启用（off / dry_run / live）。
 """
 from __future__ import annotations
 
@@ -17,14 +17,13 @@ from datetime import timedelta
 from pathlib import Path
 
 from .. import db
+from .. import platforms as platforms_mod
 from ..collectors.metrics import register_post
 from ..scriptkit import emit_result, hub_client, load_task
 from ..timeutil import iso, now, parse_iso
 from . import ActionLedger
 
-PLATFORM_LABEL = {"douyin": "抖音", "wechat_channels": "视频号", "xiaohongshu": "小红书", "kuaishou": "快手",
-                  "bilibili": "B站", "zhihu": "知乎", "wechat_mp": "公众号"}
-AUTO_ADAPTERS: dict[str, object] = {}   # platform -> adapter(pack) -> {"platform_post_id","url"}；一期为空
+PLATFORM_LABEL = platforms_mod.LABELS
 
 
 def _pack_meta(pack_dir: str | None) -> dict:
@@ -48,9 +47,11 @@ def cmd_register() -> None:
         meta = _pack_meta(d.get("pack_dir"))
         platforms = d.get("platforms") or ([d["platform"]] if d.get("platform") else meta.get("platforms") or [])
         content = d.get("content_id") or (e.get("subject") or "").removeprefix("content:")
-        for pf in platforms:
+        for raw_pf in platforms:
+            pf = platforms_mod.normalize(raw_pf)  # Agent 常写“抖音”：库里统一存 douyin
             pid = f"pk_{content}_{pf}"
-            pm = (meta.get("per_platform") or {}).get(pf, {})
+            per = meta.get("per_platform") or {}
+            pm = per.get(raw_pf) or per.get(pf) or {}
             ops.execute(
                 "INSERT INTO publish_packs(id,content_id,platform,account,title,scheduled_at,pack_dir,publish_mode,status,created_at,updated_at)"
                 " VALUES (?,?,?,?,?,?,?,?, 'ready', ?, ?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,"
@@ -69,8 +70,14 @@ def cmd_batch_card() -> None:
     if not packs:
         emit_result("今晚没有待发布内容")
         return
-    items = []
+    from ..config import load_agents_config
+
+    cfg = load_agents_config()
+    mode_label = {"live": "自动发布", "dry_run": "自动发布·试运行（仍需人工发）", "off": "半自动（人工发）"}
+    items, modes = [], set()
     for p in packs:
+        mode = _publisher_mode(cfg, p["platform"], _pack_meta(p["pack_dir"]))
+        modes.add(mode)
         t = ""
         if p["scheduled_at"]:
             try:
@@ -78,7 +85,7 @@ def cmd_batch_card() -> None:
             except ValueError:
                 t = p["scheduled_at"]
         items.append({"platform": PLATFORM_LABEL.get(p["platform"], p["platform"]), "time": t,
-                      "title": p["title"] or p["content_id"], "note": "半自动" if p["publish_mode"] != "auto" else "自动",
+                      "title": p["title"] or p["content_id"], "note": mode_label.get(mode, "半自动（人工发）"),
                       "pack_id": p["id"]})
     expires = now().replace(hour=22, minute=0, second=0)
     if expires <= now():
@@ -88,7 +95,8 @@ def cmd_batch_card() -> None:
         "title": f"今晚 {len(packs)} 条内容待发布",
         "proposal": "全部发布（每条都已通过合规复核和视频质检，才会进入发布包）",
         "reasons": ["发布包目录里有标题、正文、话题、封面和渠道码，可在详情里逐条查看"],
-        "risks": ["半自动平台需要你在手机上发，发完回复「已发 发布包ID 链接」以便回收数据"],
+        "risks": (["自动发布会直接发到正式账号；失败或登录失效时自动转人工，群里会提醒"] if "live" in modes else []) +
+                 (["人工发布的平台需要你在手机上发，发完回复「已发 发布包ID 链接」以便回收数据"] if modes - {"live"} else []),
         "items": items,
         "options": [
             {"key": "approve_all", "label": "全部发布",
@@ -103,25 +111,72 @@ def cmd_batch_card() -> None:
     emit_result(f"今晚 {len(packs)} 条待发布，已生成批量卡片", status="needs_decision", needs_decision=True, decision_card=card)
 
 
+def _per_platform(meta: dict, platform: str) -> dict:
+    """meta.json 里平台键可能是中文（Agent 写的“抖音”），按归一后的代码匹配。"""
+    for k, v in (meta.get("per_platform") or {}).items():
+        if platforms_mod.normalize(k) == platform:
+            return v or {}
+    return {}
+
+
+def _pack_files(p: dict, meta: dict) -> list[Path]:
+    """要随发布消息一起发进群的文件：封面、视频（手机上保存后直接发）。"""
+    if not p.get("pack_dir"):
+        return []
+    d = Path(p["pack_dir"])
+    pm = _per_platform(meta, p["platform"])
+    media = meta.get("media") or {}
+    names = [pm.get("cover") or media.get("cover"), media.get("video"), *(media.get("images") or [])]
+    out = []
+    for n in names:
+        if n and (d / n).is_file() and (d / n) not in out:
+            out.append(d / n)
+    return out
+
+
 def _manual_instructions(p: dict, meta: dict) -> str:
-    pm = (meta.get("per_platform") or {}).get(p["platform"], {})
-    lines = [f"**{PLATFORM_LABEL.get(p['platform'], p['platform'])} · {p['title'] or p['content_id']}**（`{p['id']}`）"]
-    for k, label in (("title", "标题"), ("body", "正文"), ("topics", "话题"), ("scheduled_at", "时间"), ("ai_label", "AI 声明")):
+    pm = _per_platform(meta, p["platform"])
+    lines = []
+    if meta.get("is_test"):
+        lines.append(f"> ⚠️ **测试内容，不要真的发布**：{meta.get('test_note') or ''}")
+    lines.append(f"**{PLATFORM_LABEL.get(p['platform'], p['platform'])} · {p['title'] or p['content_id']}**（`{p['id']}`）")
+    for k, label in (("account", "账号"), ("scheduled_at", "时间"), ("title", "标题")):
         v = pm.get(k) or meta.get(k)
         if v:
-            lines.append(f"- {label}：{' '.join(v) if isinstance(v, list) else v}")
-    if p["pack_dir"]:
-        lines.append(f"- 素材目录：`{p['pack_dir']}`")
-    lines.append(f"- 发完回复：`已发 {p['id']} <链接>`")
+            lines.append(f"- {label}：{v[11:16] if k == 'scheduled_at' and len(str(v)) > 16 else v}")
+    body = pm.get("body") or meta.get("body")
+    topics = pm.get("topics") or meta.get("topics")
+    if body or topics:
+        lines += ["", "**正文（整段复制）**", "", str(body or "") + ("\n" + " ".join(topics) if topics else "")]
+    if pm.get("pinned_comment"):
+        lines += ["", f"**置顶评论**：{pm['pinned_comment']}"]
+    if pm.get("ai_label") or meta.get("ai_label"):
+        lines.append("- 发布时勾选「AI 生成内容」声明")
+    files = _pack_files(p, meta)
+    if files:
+        lines.append("- 素材：见下方文件 " + "、".join(f"「{f.name}」" for f in files))
+    lines += ["", f"发完回复：`已发 {p['id']} <链接>`"]
     return "\n".join(lines)
 
 
+def _publisher_mode(cfg: dict, platform: str, meta: dict) -> str:
+    """off / dry_run / live；测试内容最多试运行。"""
+    mode = str(((cfg.get("publishers") or {}).get(platform) or {}).get("mode") or "off")
+    if mode == "live" and meta.get("is_test"):
+        return "dry_run"
+    return mode if mode in ("off", "dry_run", "live") else "off"
+
+
 def cmd_run() -> None:
+    from ..config import load_agents_config
+    from . import publishers as pubs
+
     lease = load_task()
     ops = db.open_ops()
     ledger = ActionLedger(ops)
     hub = hub_client()
-    done, manual, skipped = [], [], []
+    cfg = load_agents_config()
+    done, manual, skipped, notes = [], [], [], []
     for e in lease.get("events") or []:
         d = e.get("data") or {}
         pack_id = d.get("pack_id") or (e.get("subject") or "").removeprefix("pack:")
@@ -135,33 +190,59 @@ def cmd_run() -> None:
             skipped.append(f"{pack_id}（{why}）")
             continue
         meta = _pack_meta(p["pack_dir"])
-        adapter = AUTO_ADAPTERS.get(p["platform"]) if p["publish_mode"] == "auto" else None
-        if adapter:
+        mode = _publisher_mode(cfg, p["platform"], meta)
+        label = PLATFORM_LABEL.get(p["platform"], p["platform"])
+        if mode in ("dry_run", "live") and pubs.module_for(p["platform"]):
             try:
-                r = adapter(p, meta)  # type: ignore[operator]
-                rec = {"platform": p["platform"], "platform_post_id": r.get("platform_post_id"), "url": r.get("url"),
-                       "content_id": p["content_id"], "title": p["title"], "publish_mode": "auto",
-                       "channel_code": meta.get("channel_code"), "post_id": f"{p['platform']}_{r.get('platform_post_id')}"}
-                register_post(ops, rec)
-                ops.execute("UPDATE publish_packs SET status='published', updated_at=? WHERE id=?", (iso(), pack_id))
-                ledger.finish(f"publish:{pack_id}", "done", r)
-                done.append(rec)
-                continue
+                r = pubs.run(p, meta, dry_run=(mode == "dry_run"))
+            except pubs.NotLoggedIn as ex:
+                hub.notify("alert", f"{label}登录失效，改为人工发布", f"{ex}\n\n发布包 `{pack_id}` 已转人工发布。",
+                           priority=1, ref=f"login:{p['platform']}", dedup=False)
+                r = None
             except Exception as ex:  # noqa: BLE001
-                ledger.finish(f"publish:{pack_id}", "failed", {"error": str(ex)[:300]})
-                ops.execute("UPDATE publish_packs SET status='failed', updated_at=? WHERE id=?", (iso(), pack_id))
-                skipped.append(f"{pack_id}（自动发布失败：{ex}）")
+                hub.notify("message", f"{label}自动{'发布试运行' if mode == 'dry_run' else '发布'}失败，改为人工发布",
+                           f"`{pack_id}`：{pubs.friendly_error(ex)}" + ("\n\n出错时的页面截图见下一条。" if getattr(ex, "screenshot", None) else ""),
+                           priority=1, ref=f"pubfail:{pack_id}", dedup=True)
+                if getattr(ex, "screenshot", None):
+                    hub.notify("file", Path(ex.screenshot).name, ex.screenshot, priority=1,
+                               ref=f"pubfail-shot:{pack_id}", dedup=True)
+                r = None
+            if r and r.dry_run:
+                notes.append(f"{label}试运行：" + "；".join(r.notes))
+                hub.notify("message", f"{label}自动发布试运行（没有发布）",
+                           f"`{pack_id}` 已在{label}后台自动填好并停在发布前，截图见下方。\n\n" +
+                           "\n".join(f"- {n}" for n in r.notes) + "\n\n试运行期间仍需人工发布（见下一条）。",
+                           priority=1, ref=f"dryrun:{pack_id}", dedup=True)
+                for sp in r.screenshots:
+                    hub.notify("file", Path(sp).name, sp, priority=1, ref=f"dryrun-shot:{pack_id}:{Path(sp).name}", dedup=True)
+            elif r and r.ok:
+                rec = {"platform": p["platform"], "platform_post_id": r.platform_post_id, "url": r.url,
+                       "content_id": p["content_id"], "title": p["title"], "publish_mode": "auto",
+                       "channel_code": meta.get("channel_code"),
+                       "post_id": f"{p['platform']}_{r.platform_post_id}" if r.platform_post_id else None}
+                if r.platform_post_id or r.url:
+                    rec["post_id"] = register_post(ops, {k: v for k, v in rec.items() if v is not None})
+                ops.execute("UPDATE publish_packs SET status='published', updated_at=? WHERE id=?", (iso(), pack_id))
+                ledger.finish(f"publish:{pack_id}", "done", {"url": r.url, "notes": r.notes})
+                hub.notify("message", f"✅ {label}已自动发布「{p['title'] or p['content_id']}」",
+                           ("链接：" + r.url if r.url else "没拿到作品链接，发完回复「已发 " + pack_id + " <链接>」补登记") +
+                           "\n\n" + "\n".join(f"- {n}" for n in r.notes), priority=1, ref=f"published:{pack_id}", dedup=True)
+                if rec.get("post_id") and (r.platform_post_id or r.url):
+                    done.append(rec)
                 continue
         ops.execute("UPDATE publish_packs SET status='approved', updated_at=? WHERE id=?", (iso(), pack_id))
         ledger.finish(f"publish:{pack_id}", "awaiting_manual")
-        manual.append(_manual_instructions(p, meta))
-    if manual:
-        hub.notify("message", f"请手动发布 {len(manual)} 条（已批准）", "\n\n".join(manual), priority=1,
-                   ref=f"manual-publish:{lease['task']['id']}", dedup=True)
+        manual.append((p, meta))
+    # 每个发布包一条消息，紧跟它的封面 / 视频文件（中台按入队顺序发）
+    for i, (p, meta) in enumerate(manual, 1):
+        hub.notify("message", f"请手动发布（{i}/{len(manual)}）{p['title'] or p['content_id']}", _manual_instructions(p, meta),
+                   priority=1, ref=f"manual-publish:{p['id']}", dedup=True)
+        for f in _pack_files(p, meta):
+            hub.notify("file", f.name, str(f), priority=1, ref=f"manual-publish-file:{p['id']}:{f.name}", dedup=True)
     follow = [{"type": "social.post.published", "subject": f"post:{r['post_id']}", "summary": f"{r['platform']} 已发布「{r['title']}」",
                "data": r} for r in done]
-    emit_result(f"自动发布 {len(done)} 条，推送人工发布 {len(manual)} 条，跳过 {len(skipped)} 条",
-                follow_up_events=follow, skipped=skipped)
+    emit_result(f"自动发布 {len(done)} 条，推送人工发布 {len(manual)} 条（含素材文件），跳过 {len(skipped)} 条"
+                + ("；" + "；".join(notes) if notes else ""), follow_up_events=follow, skipped=skipped)
 
 
 def record_manual(pack_id: str, url: str, platform_post_id: str | None = None) -> dict:

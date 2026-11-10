@@ -91,7 +91,7 @@ dws 目前发的卡片不支持按钮回调，所以卡片以 Markdown 消息发
 | --- | --- |
 | 0 骨架：中台、opsd、规则校验、熔断降级、通知出口、批红、决策档案、日报 | ✅ 已实现并实测：真实 Claude / Codex / Antigravity 都跑通了结构化输出；本机全链路跑通了日报 |
 | 1 数据回收：发布登记、T+1h/24h/72h/7d 快照、异常 → 单条复盘、评论采集与分拣、漏斗导入 | ✅ 框架完成；**自动采集源目前只有抖音（TikHub）**，其他平台用 `opsctl metrics import` 导入创作者后台导出，创作者后台 Playwright 采集器待写 |
-| 2 内容流水线：选题 → 脚本 → 合规 → 素材 → 质检 → 发布包 → 17:00 卡片 → 发布 | ✅ 全部事件链与 Skill 已接好；发布一期全部半自动（推给人发），`executors/publish.py` 的 `AUTO_ADAPTERS` 留了自动发布接口 |
+| 2 内容流水线：选题 → 脚本 → 合规 → 素材 → 质检 → 发布包 → 17:00 卡片 → 发布 | ✅ 全部事件链与 Skill 已接好；抖音 / 视频号 / 小红书已有 Playwright 自动发布器（`opsctl publish login|check|try`），按平台 `publishers.<平台>.mode` 切换 off / dry_run / live，失败自动转人工；其余平台半自动 |
 | 3 需求与 CI：需求池、Top 10 卡片、PRD、MR 审查 ≤ 3 轮、合并闸门、线上核实 | ✅ 已实现；GitLab 调用未连真实仓库验证（需配置 Token 和项目） |
 | 4 获客：监听、线索、GEO | ✅ Skill 与入库已接好，依赖 Antigravity 浏览器操作；中台迁内网服务器：配置 `hub.host` / `hub.token` 即可 |
 | 5 放开自动回复 / 自动发布 | 未开始（按设计需连续 4 周无事故再评估） |

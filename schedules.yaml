@@ -5,6 +5,7 @@
 - { type: cron.funnel_export,      at: "06:40" }
 - { type: cron.daily_brief,        at: "08:30" }
 - { type: cron.social_listening,   at: "14:00" }
+- { type: cron.publish_login_check, at: "16:30", max_late: "30m", requires: publishers }
 - { type: cron.publish_batch_card, at: "17:00", max_late: "3h" }
 - { type: cron.comment_collect,    every: "1h" }
 - { type: cron.weekly_review,      at: "MON 09:00" }
