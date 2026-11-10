@@ -10,7 +10,10 @@ description: Popto 运营自动化 · GEO 检查。每周三用浏览器去各�
 
 ## 2. 被事件中台叫起来的
 1. 问题集读 `references/questions.yaml`；平台：豆包、DeepSeek、通义千问、腾讯元宝、Kimi、文心一言（网页版，专用浏览器配置目录）。每个问题开新会话提问，截图存到运行目录 `geo/`。
-2. 每个“平台 × 问题”写一行 `results`：是否提到、排名、描述原文摘要、引用来源。
+2. 每个“平台 × 问题”写一行 `results`：是否采集到（`collected`）、是否提到、排名、描述原文摘要、引用来源。
+   - **没拿到回答不等于没提到**：遇到登录墙、验证码、拦截话术（如“换个话题”）、超时，`collected=false`、`mentioned=null`，`blocked_reason` 写原因；只有读到完整回答才写 `mentioned` 的 true / false。
+   - `coverage` 写计划数、成功采集数、提到数；`summary` 里按“采集 X/Y，提到 Z”报，采集数为 0 时 `status=failed`。
+   - 专用浏览器登的是真人账号：每个问题都开**新对话**提问，不要接着历史对话问，不看、不引用账号里已有的历史对话；提问后不做别的操作。
 3. `recommendations`：没有提到我们的问题，应该写什么知乎回答 / 公众号文章 / 官网博客来补（与 geo-mini、官网博客联动）。
 4. 结论进周报，不发卡片。
 
@@ -24,6 +27,7 @@ description: Popto 运营自动化 · GEO 检查。每周三用浏览器去各�
 ## 5. 输出
 结果写成符合 `schema.json` 的 JSON（公共字段 status / summary / needs_decision / decision_card / follow_up_events / dogfood_friction 见 AGENTS.md）。本 Skill 额外字段：
 - `results`（必填）
+- `coverage`（必填）
 - `recommendations`
 
 需要人决定时 `needs_decision=true`，并写完整的 `decision_card`（一句话标题、建议、理由、风险、2–4 个选项、超时默认值必须是不做对外动作的安全选项）。

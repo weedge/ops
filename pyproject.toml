@@ -11,6 +11,7 @@ dependencies = [
 
 [project.scripts]
 opsctl = "popto_ops.cli:main"
+ops-browser = "popto_ops.agent_browser:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

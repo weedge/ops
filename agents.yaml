@@ -54,7 +54,6 @@ agents:
     strict_tiers: [readonly]  # 处理评论等不可信输入时必须真只读
     concurrency: 2
     capabilities: [video, image, browser, write, classify]
-    browser_profile: "~/popto-ops-data/browser-profiles/agent-browse"
   workbuddy:
     type: inbox               # 无可用命令行，走收件箱 / 发件箱
     inbox: "~/popto-ops-data/workbuddy-inbox"
@@ -66,6 +65,17 @@ agents:
     type: script              # 确定性脚本（采集器 / 执行器），不调用大模型
     concurrency: 4
     capabilities: [script]
+
+# Agent 专用浏览器（rules.json 里 tools=browser 的任务：社媒监听、GEO 检查）。
+# Agent 自己没有浏览器工具，由 opsd 提供 `ops-browser`（playwright-cli + 本机 Chrome + 下面的登录态目录）。
+# 登录由人完成：opsctl browse login；登录态只存在这个目录，和发布用的各平台目录分开。
+# 同一个目录同一时间只能开一个 Chrome，所以浏览器档位的任务由 opsd 串行执行。
+agent_browser:
+  enabled: true
+  profile: "~/popto-ops-data/browser-profiles/agent-browse"
+  headed: true                # 有界面运行：任务期间桌面上会有一个 Chrome 窗口。无头模式下抖音搜索直接跳滑块验证码（实测），
+                              # 小红书 / 快手 / 知乎 / 各 AI 助手无头也能用；不看抖音时可改 false
+  cli: null                   # null = 数据目录 tools/ 下的 playwright-cli（opsctl browse install），其次 PATH，最后 npx
 
 fallback_chains:
   decide:   [claude, codex]

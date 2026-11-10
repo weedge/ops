@@ -19,7 +19,8 @@
   opsctl published <pk_id> [链接]     半自动发布完成后补登记（视频号没有链接，可不填）
   opsctl metrics import <csv>         导入创作者后台导出的数据
   opsctl digest [--hours 24]          中台留底摘要
-  opsctl dashboard [--no-open]        生成并打开静态看板
+  opsctl browse login [站点…]        Agent 专用浏览器人工登录；check 检查；sites 站点清单
+opsctl dashboard [--no-open]        生成并打开静态看板
   opsctl launchd install [--load]     生成 launchd plist（默认只生成，不加载）
   opsctl skills link                  把 ops-* Skill 软链接到 ~/.claude/skills 等位置
 """
@@ -116,6 +117,14 @@ def cmd_doctor(a) -> None:
 
         rows.append((f"钥匙串 popto-ops/{k}", bool(keychain(k)), "已配置" if keychain(k) else
                      f"security add-generic-password -s popto-ops/{k} -a popto-ops -w"))
+    from . import agent_browser as ab
+
+    abs_ = ab.settings(cfg)
+    if abs_["enabled"]:
+        ver = ab.cli_version(cfg)
+        rows.append(("专用浏览器 playwright-cli", bool(ver), ver or f"不可用：{' '.join(abs_['cli'])}"))
+        rows.append(("专用浏览器登录态", ab.is_initialized(abs_), str(abs_["profile"]) if ab.is_initialized(abs_)
+                     else "还没登录过：opsctl browse login"))
     n = (cfg.get("notifier") or {})
     rows.append(("通知出口", n.get("adapter") != "dingtalk" or bool((n.get("dingtalk") or {}).get("chat_id") or (n.get("dingtalk") or {}).get("user")),
                  n.get("adapter")))
@@ -250,6 +259,35 @@ def cmd_publish(a) -> None:
         else:
             ok, url = pubs.check_login(pf)
             print(f"{'✓' if ok else '✗'} {label:<4} {'已登录' if ok else '未登录（opsctl publish login ' + pf + '）'}  {url}")
+
+
+def cmd_browse(a) -> None:
+    from . import agent_browser as ab
+
+    cfg = cfgmod.load_agents_config()
+    s = ab.settings(cfg)
+    if a.action == "sites":
+        for k, u in ab.LOGIN_SITES.items():
+            print(f"{k:<12} {u}")
+        return
+    if a.action == "install":
+        sys.exit(ab.install(a.proxy))
+    if a.action == "check":
+        ver = ab.cli_version(cfg)
+        print(f"{'✓' if ver else '✗'} playwright-cli  {ver or '不可用'}  {' '.join(s['cli'])}"
+              + ("" if "npx" not in s["cli"][0] else "（建议 opsctl browse install：npx 在 Codex 沙箱里不可用）"))
+        print(f"{'✓' if ab.is_initialized(s) else '✗'} 登录态目录     {s['profile']}"
+              + ("" if ab.is_initialized(s) else "（还没登录过：opsctl browse login）"))
+        return
+    urls = []
+    for t in a.targets or list(ab.LOGIN_SITES):
+        if t in ab.LOGIN_SITES:
+            urls.append(ab.LOGIN_SITES[t])
+        elif t.startswith("http"):
+            urls.append(t)
+        else:
+            sys.exit(f"不认识的站点 {t}（opsctl browse sites 看清单，或直接给网址）")
+    sys.exit(ab.login(cfg, urls))
 
 
 def cmd_dashboard(a) -> None:
@@ -387,6 +425,11 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--live", action="store_true", help="try 时真的点发布（默认只试运行）")
     s.add_argument("--headed", action="store_true", help="显示浏览器窗口")
     s.set_defaults(fn=cmd_publish)
+    s = sp.add_parser("browse", help="Agent 专用浏览器：login [站点…] 人工登录 / check 检查 / sites 站点清单")
+    s.add_argument("action", choices=["login", "check", "sites", "install"])
+    s.add_argument("targets", nargs="*")
+    s.add_argument("--proxy", help="install 时 npm 用的代理")
+    s.set_defaults(fn=cmd_browse)
     s = sp.add_parser("digest")
     s.add_argument("--hours", type=int, default=24)
     s.set_defaults(fn=cmd_digest)

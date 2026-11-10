@@ -208,6 +208,9 @@ class CodexAdapter(Adapter):
         sandbox = "read-only" if spec.tools == "readonly" else "workspace-write"
         cmd = [self.resolve_bin(spec), "exec", "--skip-git-repo-check", "-C", str(spec.cwd), "-s", sandbox, "--json",
                "-o", str(last_msg)]
+        if spec.tools == "browser":
+            # 操作 opsd 预先开好的专用浏览器要连本机套接字；Chrome 本身不在沙箱里启动
+            cmd += ["-c", "sandbox_workspace_write.network_access=true"]
         if sandbox != "read-only":
             cmd += ["--add-dir", str(spec.run_dir)]
             for d in spec.extra_dirs:

@@ -6,3 +6,4 @@ local.yaml
 *.db
 *.db-wal
 *.db-shm
+.playwright-cli/

@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .. import agent_browser
 from .. import config as cfgmod
 from .. import paths
 from ..timeutil import iso, now, parse_duration
@@ -52,6 +53,7 @@ class Worker:
         self.stop = threading.Event()
         self.network_ok = True
         self._last_probe = 0.0
+        self._browser_lock = threading.Lock()  # 专用浏览器的登录态目录同一时间只能开一个 Chrome
 
     # ---------------------------------------------------------------- 主循环
     def local_agents(self) -> list[str]:
@@ -185,12 +187,32 @@ class Worker:
         log.info("任务 %s [%s] %s → %s %s", tid, rule.get("name"), agent, body["status"], body.get("error_kind") or "")
         return resp
 
+    def _uses_browser(self, rule: dict, acfg: dict) -> bool:
+        return (rule.get("tools") == "browser" and acfg.get("type") not in ("script", "inbox") and rule.get("to") != "script"
+                and agent_browser.settings(self.cfg)["enabled"])
+
     def _run_agent(self, lease: dict, agent: str, acfg: dict, run_dir: Path, alive) -> tuple[RunResult, Path | None]:
+        if not self._uses_browser(lease["rule"], acfg):
+            return self._run_agent_impl(lease, agent, acfg, run_dir, alive)
+        benv = {**os.environ, "OPS_RUN_DIR": str(run_dir)}
+        with self._browser_lock:  # 等锁期间租约照常续
+            try:
+                err = agent_browser.open_session(self.cfg, benv)
+                if err:
+                    return RunResult(ok=True, output={"status": "failed", "needs_decision": False,
+                                                      "summary": f"专用浏览器没开起来，任务未执行：{err}"[:600]}), None
+                return self._run_agent_impl(lease, agent, acfg, run_dir, alive)
+            finally:
+                agent_browser.close(self.cfg, benv)
+
+    def _run_agent_impl(self, lease: dict, agent: str, acfg: dict, run_dir: Path, alive) -> tuple[RunResult, Path | None]:
         t, rule = lease["task"], lease["rule"]
         adapter = adapter_for(acfg)
         env = agent_env(self.cfg)
         env.update({"OPS_TASK_FILE": str(run_dir / "task.json"), "OPS_RUN_DIR": str(run_dir),
                     "OPS_HUB_URL": self.client.base, "OPS_DATA": str(paths.ops_data()), "OPS_HOME": str(self.home)})
+        if self._uses_browser(rule, acfg):
+            env["OPS_BROWSER_PREOPENED"] = "1"
         timeout = parse_duration(rule.get("timeout"), None)
         timeout_s = timeout.total_seconds() if timeout else 900.0
         if acfg.get("type") == "inbox":
@@ -229,6 +251,8 @@ class Worker:
             if rule.get("capability") == "video" and acfg.get("type") != "antigravity":
                 notes += video_prep.prepare(run_dir)
                 ctx.files.append(("context/", "降级预处理产物（抽帧宫格、转写）"))
+            if self._uses_browser(rule, acfg):
+                notes.append(agent_browser.agent_note(self.cfg))
             if lease.get("is_fallback"):
                 notes.append(f"你是降级接手的 Agent（主 Agent 不可用）。")
             skill_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")

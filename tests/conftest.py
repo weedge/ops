@@ -34,6 +34,7 @@ def home(tmp_path, monkeypatch):
         "external_skill_dirs": [str((REPO.parent / "skills").resolve())],
         "notifier": {"adapter": "file"},
         "proxy": None,
+        "agent_browser": {"cli": ["true"], "profile": str(data / "browser-profiles" / "agent-browse")},  # 测试里不真开浏览器
     }, allow_unicode=True))
     monkeypatch.setenv("OPS_HOME", str(h))
     monkeypatch.setenv("OPS_DATA", str(data))

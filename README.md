@@ -24,6 +24,7 @@
 | `popto_ops/opsd/` | 接单程序：适配器、熔断识别、运行目录与 `input.md`、视频降级预处理 |
 | `popto_ops/notifier/` | 通知出口（console / file / dingtalk / lark）、卡片渲染、钉钉回复监听 |
 | `popto_ops/collectors/` | 指标快照（T+1h/24h/72h/7d + 异常检测；抖音 / 视频号 / 小红书读创作者后台 `creator.py`）、评论采集、漏斗导入、TikHub 客户端 |
+| `popto_ops/agent_browser.py` | Agent 专用浏览器 `ops-browser`（playwright-cli + 本机 Chrome + 固定登录态目录），监听和 GEO 检查用 |
 | `popto_ops/executors/` | 发布、评论回复、运营清理执行器（只执行已批准、24 小时内、按 action_id 幂等） |
 | `popto_ops/ci/` | CI 中台：发现 Agent MR、审查结论写回、合并闸门、线上核实 |
 | `popto_ops/ingest.py` | Agent 结构化产出 → `ops.db`（Agent 自己不写业务库） |
@@ -57,7 +58,8 @@ tail ~/popto-ops-data/notify/console.log
 2. `密钥（只放钥匙串）：security add-generic-password -s popto-ops/tikhub -a popto-ops -w <key>；同样配置 redfox、gitlab（机器人账号，api 权限）。`
 3. `CI：local.yaml 的 ci.projects 填要接入的仓库（如 popto/frontend_popto）；ci.auto_merge 保持 false（合并都发卡片），跑稳后再打开。`
 4. `常驻：uv run opsctl launchd install 生成 plist，确认无误后 uv run opsctl launchd install --load。`
-5. `Skill 分发（可选）：uv run opsctl skills link` 把 `ops-*` 软链接到 `~/.claude/skills` 和仓库内 `.claude/skills`、`.agents/skills`。
+5. `Agent 专用浏览器：先 uv run opsctl browse install`（把 playwright-cli 装到数据目录 `tools/`，需要走代理时加 `--proxy <npm 代理>`），再 `uv run opsctl browse login` 打开有界面的 Chrome，把要用的站点（抖音、小红书、快手、知乎、各家 AI 助手等，`opsctl browse sites` 看清单，也可只登其中几个：`opsctl browse login douyin doubao`）逐个登录后回车。登录态存在 `~/popto-ops-data/browser-profiles/agent-browse`，和发布用的各平台目录分开；建议用专门的小号，不要用发布账号。`opsctl browse check` 检查。
+6. `Skill 分发（可选）：uv run opsctl skills link` 把 `ops-*` 软链接到 `~/.claude/skills` 和仓库内 `.claude/skills`、`.agents/skills`。
 
 ## 批红
 
@@ -77,6 +79,7 @@ dws 目前发的卡片不支持按钮回调，所以卡片以 Markdown 消息发
 ## 关键行为
 
 - **启动方式**：Agent 走本机包装脚本 `~/claude.sh`、`~/codex.sh`、`~/agy.sh`（和终端别名一致，代理各用各的）。包装脚本自带全权限参数，实测档位收紧情况：claude 的禁用清单仍生效（只读档位安全；workspace / dev 档位白名单失效，只靠禁用清单，已禁 `security`、`dws`、`ssh`、`git push -f` 等）；codex 的 `exec -s read-only` 能覆盖；agy 的 `--sandbox` 会被 `--dangerously-skip-permissions` 压过，所以 agy 的只读档位改为直调 `~/.local/bin/agy`，代理取 `agy.sh` 里的 `PROXY=`。哪些档位绕开包装脚本由 `agents.yaml` 的 `strict_tiers` 决定。
+- **专用浏览器**：Antigravity / Codex 自己没有浏览器工具。`tools: browser` 的任务（社媒监听、GEO 检查）由 opsd 在 `input.md` 里给出 `ops-browser` 的用法，Agent 通过它操作专用 Chrome；包装层固定会话和登录态目录，拦掉 Cookie / 本地存储读写、上传、改请求等命令。浏览器由 opsd 在拉起 Agent 前开好、结束后关掉（Codex 的沙箱里启动不了 Chrome，但能操作已开着的），浏览器档位任务串行执行。默认有界面运行（`agent_browser.headed`）：无头模式下抖音搜索会直接跳滑块验证码，任务期间桌面上会有一个 Chrome 窗口。没登录的站点 Agent 不会尝试登录，会写进 `ops_feedback`。配置在 `agents.yaml` 的 `agent_browser`。
 - **降级**：额度 / 认证错误 → 熔断该 Agent（额度 60 分钟或解析出的恢复时间，认证 6 小时并告警），任务立即走下一个 Agent；超时、输出不合格 → 换下一个（不合格先带着校验错误同一 Agent 重试 1 次）；同一 Agent 连续 3 次超时熔断 30 分钟；冷却结束自动半开。
 - **不降级到弱模型**：decide / dev 只在 Claude ↔ Codex 之间；review 强制审查者 ≠ 生产者，Codex 不可用时排队等待。
 - **额度策略**：`opsctl agents usage claude 0.75` 登记周用量后，P2 任务改由 Codex 主跑，P3 不再用 Claude。
@@ -93,5 +96,5 @@ dws 目前发的卡片不支持按钮回调，所以卡片以 Markdown 消息发
 | 1 数据回收：发布登记、T+1h/24h/72h/7d 快照、异常 → 单条复盘、评论采集与分拣、漏斗导入 | ✅ 已实现；抖音 / 视频号 / 小红书的指标直接读创作者后台（复用发布登录态，同一平台的发布 / 采集 / 登录排队用浏览器），抖音读不到时 TikHub 兜底；没有作品 ID 的帖子按「标题 + 发布时间」对上后补登记 ID；评论采集目前只有抖音（TikHub）；其他平台用 `opsctl metrics import` 导入后台导出 |
 | 2 内容流水线：选题 → 脚本 → 合规 → 素材 → 质检 → 发布包 → 17:00 卡片 → 发布 | ✅ 全部事件链与 Skill 已接好；抖音 / 视频号 / 小红书已有 Playwright 自动发布器（`opsctl publish login|check|try`），按平台 `publishers.<平台>.mode` 切换 off / dry_run / live，失败自动转人工；其余平台半自动 |
 | 3 需求与 CI：需求池、Top 10 卡片、PRD、MR 审查 ≤ 3 轮、合并闸门、线上核实 | ✅ 已实现；GitLab 调用未连真实仓库验证（需配置 Token 和项目） |
-| 4 获客：监听、线索、GEO | ✅ Skill 与入库已接好，依赖 Antigravity 浏览器操作；中台迁内网服务器：配置 `hub.host` / `hub.token` 即可 |
+| 4 获客：监听、线索、GEO | ✅ Skill 与入库已接好，浏览器操作走 `ops-browser`（需先 `opsctl browse login`）；中台迁内网服务器：配置 `hub.host` / `hub.token` 即可 |
 | 5 放开自动回复 / 自动发布 | 未开始（按设计需连续 4 周无事故再评估） |
