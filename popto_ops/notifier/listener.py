@@ -1,6 +1,6 @@
 """钉钉回调监听（cn.popto.ops.dingtalk-events）：dws event 长连接 → 中台事件。本机不需要公网入口。
 
-支持的回复（只接受 notifier.dingtalk.approvers 里的人）：
+支持的回复（只接受 notifier.dingtalk.approvers 里的人；card_approvers 里的人只能批对应类型的卡片）：
   C12 1 [原因]            批卡片 C12，选第 1 个选项（也可写选项 key）
   记下来：……              追加到 decisions.md
   需求：……                转成 demand.manual 进需求池
@@ -79,13 +79,18 @@ def parse_command(text: str) -> dict | None:
     return None
 
 
-def handle_event(raw: dict, hub: HubClient, approvers: list[str], allow_any: bool = False) -> dict | None:
+def handle_event(raw: dict, hub: HubClient, approvers: list[str], allow_any: bool = False,
+                 card_approvers: list[str] | None = None) -> dict | None:
+    """approvers：全权审批人。card_approvers：只能批指定类型卡片的人（哪类能批由中台按 card_approvers 配置判断），
+    他们发的其他指令（记下来 / 需求 / 已发 / 暂停）一律忽略。"""
     etype = raw.get("event_type") or raw.get("type") or ""
     senders = set(_walk(raw, SENDER_KEYS))
-    if not allow_any and not (senders & set(map(str, approvers))):
+    full = senders & set(map(str, approvers))
+    limited = set() if full else senders & set(map(str, card_approvers or []))
+    if not allow_any and not full and not limited:
         log.info("忽略非审批人的消息（发送者 %s）。如需允许，把其 userId 加进 notifier.dingtalk.approvers", senders or "未知")
         return None
-    who = sorted(senders & set(map(str, approvers)))[:1] or sorted(senders)[:1] or ["dingtalk"]
+    who = sorted(full)[:1] or sorted(limited)[:1] or sorted(senders)[:1] or ["dingtalk"]
     if "card_action" in etype:
         ctx = _walk(raw, ("context",))
         data = {}
@@ -113,6 +118,9 @@ def handle_event(raw: dict, hub: HubClient, approvers: list[str], allow_any: boo
                 break
         if not evt:
             return None
+    if limited and evt["type"] != "decision.made":
+        log.info("忽略限定审批人 %s 的非批红指令：%s", who[0], evt["type"])
+        return None
     if evt["type"] == "_pause":
         return hub.post("/v1/pause", {"key": evt["key"], "reason": f"钉钉 {who[0]}"})
     if evt["type"] == "_resume":
@@ -162,7 +170,8 @@ def _watch_stderr(proc: subprocess.Popen, state: dict, key: str) -> None:
             _write_status(key, connected=False, last_error=line.strip()[:300])
 
 
-def consume(cmd: list[str], hub: HubClient, approvers: list[str], allow_any: bool, stop: threading.Event) -> None:
+def consume(cmd: list[str], hub: HubClient, approvers: list[str], allow_any: bool, stop: threading.Event,
+            card_approvers: list[str] | None = None) -> None:
     backoff = 5
     key = cmd[3] if len(cmd) > 3 else "dws"
     while not stop.is_set():
@@ -196,7 +205,7 @@ def consume(cmd: list[str], hub: HubClient, approvers: list[str], allow_any: boo
                     continue
                 try:
                     raw = json.loads(line)
-                    handle_event(raw, hub, approvers, allow_any)
+                    handle_event(raw, hub, approvers, allow_any, card_approvers)
                     backoff = 5
                 except Exception:  # noqa: BLE001
                     log.exception("处理事件失败：%s", line[:300])
@@ -220,7 +229,7 @@ POLL_LOOKBACK = 600      # 启动时回看 10 分钟
 
 
 def poll_group(chat_id: str, hub: HubClient, approvers: list[str], allow_any: bool, stop: threading.Event,
-               dws: str = "dws", interval: float = POLL_INTERVAL) -> None:
+               dws: str = "dws", interval: float = POLL_INTERVAL, card_approvers: list[str] | None = None) -> None:
     from datetime import datetime, timedelta
 
     state_path = paths.ops_data() / "listener.poll.json"
@@ -248,7 +257,7 @@ def poll_group(chat_id: str, hub: HubClient, approvers: list[str], allow_any: bo
                     continue
                 seen.append(mid)
                 try:
-                    handle_event({"type": "group_message_poll", **m}, hub, approvers, allow_any)
+                    handle_event({"type": "group_message_poll", **m}, hub, approvers, allow_any, card_approvers)
                 except Exception:  # noqa: BLE001
                     log.exception("处理轮询到的消息失败：%s", str(m)[:300])
             since = started
@@ -272,19 +281,21 @@ def main() -> int:
     hub = HubClient(f"http://{h.get('host', '127.0.0.1')}:{h.get('port', 8787)}", h.get("token"))
     dt = (cfg.get("notifier") or {}).get("dingtalk") or {}
     approvers = [str(x) for x in dt.get("approvers") or []]
+    card_approvers = sorted({str(x) for ids in (dt.get("card_approvers") or {}).values() for x in ids or []})
     allow_any = "--allow-any" in sys.argv
-    if not approvers and not allow_any:
+    if not approvers and not card_approvers and not allow_any:
         log.error("notifier.dingtalk.approvers 为空：为安全起见不接受任何人的批红。请在 local.yaml 配置后重启。")
     stop = threading.Event()
     threads = []
     if dt.get("chat_id"):
         cmd = ["dws", "event", "consume", "user_im_message_receive_group", "--group", dt["chat_id"], "--flatten", "-f", "ndjson"]
-        threads.append(threading.Thread(target=consume, args=(cmd, hub, approvers, allow_any, stop), daemon=True))
-        threads.append(threading.Thread(target=poll_group, args=(dt["chat_id"], hub, approvers, allow_any, stop), daemon=True))
+        threads.append(threading.Thread(target=consume, args=(cmd, hub, approvers, allow_any, stop, card_approvers), daemon=True))
+        threads.append(threading.Thread(target=poll_group, args=(dt["chat_id"], hub, approvers, allow_any, stop),
+                                        kwargs={"card_approvers": card_approvers}, daemon=True))
     else:
         log.warning("未配置 notifier.dingtalk.chat_id，只监听互动卡片回调")
     cmd = ["dws", "event", "consume", "user_card_action_triggered", "--flatten", "-f", "ndjson"]
-    threads.append(threading.Thread(target=consume, args=(cmd, hub, approvers, allow_any, stop), daemon=True))
+    threads.append(threading.Thread(target=consume, args=(cmd, hub, approvers, allow_any, stop, card_approvers), daemon=True))
     for t in threads:
         t.start()
 

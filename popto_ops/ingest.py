@@ -116,7 +116,10 @@ def weekly_review(ops, out: dict, lease: dict) -> None:
 
 
 def social_listening(ops, out: dict, lease: dict) -> None:
+    from . import platforms
+
     for ld in out.get("leads") or []:
+        ld["platform"] = platforms.normalize(ld.get("platform")) or ""  # “B站”和 bilibili 算同一个平台，不重复入库
         lid = "ld_" + _sid(ld.get("platform", ""), ld.get("profile_url", ""))
         ops.execute("INSERT INTO leads(id,platform,profile_url,nickname,industry,lead_type,followers,score,stage,why,outreach_draft,updated_at)"
                     " VALUES (?,?,?,?,?,?,?,?, '发现', ?,?,?) ON CONFLICT(id) DO UPDATE SET score=excluded.score, why=excluded.why,"
@@ -126,6 +129,10 @@ def social_listening(ops, out: dict, lease: dict) -> None:
     for t in out.get("term_stats") or []:
         ops.execute("UPDATE listening_terms SET hits_7d=?, updated_at=? WHERE term=?", (t.get("hits", 0), iso(), t.get("term")))
     _signals(ops, out.get("signals"), "listening", lease["task"]["id"])
+    # 有还没发过卡片的新线索：接着触发“今日线索卡片”（确定性脚本按库里的线索生成，不靠 Agent 写卡片）
+    if ops.execute("SELECT 1 FROM leads WHERE stage='发现' LIMIT 1").fetchone():
+        out.setdefault("follow_up_events", []).append({
+            "type": "lead.batch.ready", "subject": f"leads:{lease['task']['id']}", "summary": "监听发现新线索，生成今日线索卡片"})
 
 
 def topic_planning(ops, out: dict, lease: dict) -> None:

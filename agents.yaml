@@ -127,6 +127,10 @@ notifier:
     user: null                # 或发给个人：userId
     robot_code: null
     approvers: []             # 允许批红的 openDingTalkId（群消息）和 userId（卡片回调）；不认昵称；为空时只接受 opsctl decide
+    card_approvers: {}        # 限定审批人：只能批指定类型的卡片，别的卡片和其他指令（记下来 / 暂停等）都不接受。
+                              # 键 = 产出卡片的规则名（如 今日线索卡片），或脚本产出卡片的 kind（lead_batch、publish_batch）；
+                              # Agent 写的卡片 kind 是模型自己填的，只能用规则名限定。值 = ID 列表，写法同 approvers。
+                              # 例：{lead_batch: ["<openDingTalkId>", "<userId>"]}
     at_on_alert: []
   lark:
     chat_id: null

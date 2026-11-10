@@ -14,7 +14,7 @@
 
 | 路径 | 内容 |
 | --- | --- |
-| `rules.json` | 事件 → Agent 路由规则（44 条，对应设计 02 §3 的事件目录） |
+| `rules.json` | 事件 → Agent 路由规则（47 条，对应设计 02 §3 的事件目录） |
 | `agents.yaml` | Agent 启动方式、能力、并发、降级链、熔断、预算、静默时段、通知出口 |
 | `schedules.yaml` | 定时事件（中台每分钟检查，睡眠错过的会补发最近一次） |
 | `decisions.md` / `not-doing.md` | 定的事 / 定了不做的事（只追加） |
@@ -25,7 +25,7 @@
 | `popto_ops/notifier/` | 通知出口（console / file / dingtalk / lark）、卡片渲染、钉钉回复监听 |
 | `popto_ops/collectors/` | 指标快照（T+1h/24h/72h/7d + 异常检测；抖音 / 视频号 / 小红书读创作者后台 `creator.py`）、评论采集、漏斗导入、TikHub 客户端 |
 | `popto_ops/agent_browser.py` | Agent 专用浏览器 `ops-browser`（playwright-cli + 本机 Chrome + 固定登录态目录），监听和 GEO 检查用 |
-| `popto_ops/executors/` | 发布、评论回复、运营清理执行器（只执行已批准、24 小时内、按 action_id 幂等） |
+| `popto_ops/executors/` | 发布、评论回复、运营清理、线索卡片与跟进登记执行器（只执行已批准、24 小时内、按 action_id 幂等） |
 | `popto_ops/ci/` | CI 中台：发现 Agent MR、审查结论写回、合并闸门、线上核实 |
 | `popto_ops/ingest.py` | Agent 结构化产出 → `ops.db`（Agent 自己不写业务库） |
 | `dashboards/index.html` | 静态看板模板（`opsctl dashboard` 生成） |
@@ -74,7 +74,7 @@ dws 目前发的卡片不支持按钮回调，所以卡片以 Markdown 消息发
 | `已发 pk_c1_douyin [链接]` | 半自动发布完成后补登记，自动排定数据采集；视频号没有链接、或给的是短链时，采集时按标题在后台对上作品 |
 | `暂停 douyin` / `恢复 douyin` | 暂停 / 恢复某个平台、规则或 Agent 的全部自动化 |
 
-只接受 `approvers` 里的人；同样的操作也可以用 `opsctl decide C12 1`、`opsctl note`、`opsctl demand`、`opsctl published`。互动卡片回调（`user_card_action_triggered`）也已接入监听，dws 支持按钮卡片后可直接使用。
+只接受 `approvers` 里的人（全权：所有卡片和指令）；想让别人只批某一类卡片，在 `local.yaml` 的 `notifier.dingtalk.card_approvers` 里按类型加人，例如 `{lead_batch: [<ID>]}` 只能批线索卡片，批别的卡片会收到“没有审批权限”的提示，发其他指令会被忽略（改完重启钉钉监听和中台）。同样的操作也可以用 `opsctl decide C12 1`、`opsctl note`、`opsctl demand`、`opsctl published`。互动卡片回调（`user_card_action_triggered`）也已接入监听，dws 支持按钮卡片后可直接使用。
 
 ## 关键行为
 

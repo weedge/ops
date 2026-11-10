@@ -244,7 +244,12 @@ class Hub:
     def _handle_internal(self, e: dict) -> dict:
         data = e.get("data") or {}
         if e["type"] == "decision.made":
-            return self.decide(data.get("card") or e.get("subject") or "", data.get("choice"),
+            ref = data.get("card") or e.get("subject") or ""
+            if e["source"] == "dingtalk":
+                deny = self.approver_denied(ref, str(data.get("by") or ""))
+                if deny:
+                    return {"ok": False, "error": deny}
+            return self.decide(ref, data.get("choice"),
                                by=data.get("by") or e["source"], reason=data.get("reason"))
         if e["type"] == "decision.note":
             text = data.get("text") or e.get("summary") or ""
@@ -618,6 +623,32 @@ class Hub:
         if m:
             return self.q1("SELECT * FROM cards WHERE seq=?", (int(m.group(1)),))
         return self.q1("SELECT * FROM cards WHERE id=?", (ref,))
+
+    def card_scopes(self, card: dict) -> set[str]:
+        """这张卡片可以用来限定审批人的“类型”：产出它的规则名；由确定性脚本产出时再加上卡片 kind。
+
+        Agent 写的卡片 kind 是模型自己填的，不能拿来做权限判断，所以只认规则名。
+        """
+        rules = [t["rule"] for tid in _load(card["task_ids"], [])
+                 if (t := self.q1("SELECT rule FROM tasks WHERE id=?", (tid,)))]
+        scopes = set(rules)
+        if rules and card.get("kind") and all((self.rule_index.get(r) or {}).get("to") == "script" for r in rules):
+            scopes.add(card["kind"])
+        return scopes
+
+    def approver_denied(self, card_ref: str, by: str) -> str | None:
+        """钉钉来的批红：全权审批人（approvers）什么卡片都能批；只在 card_approvers 里的人只能批对应类型。"""
+        dt = (self.cfg.get("notifier") or {}).get("dingtalk") or {}
+        limited = dt.get("card_approvers") or {}
+        if not limited or by in {str(x) for x in dt.get("approvers") or []}:
+            return None
+        card = self.find_card(card_ref)
+        if not card:
+            return None  # 交给 decide 报“找不到卡片”
+        scopes = self.card_scopes(card)
+        if any(by in {str(x) for x in ids or []} for key, ids in limited.items() if key in scopes):
+            return None
+        return f"你没有这类卡片的审批权限（C{card['seq']}「{card['title']}」），请全权审批人处理。"
 
     def decide(self, card_ref: str, choice: Any, *, by: str = "human", reason: str | None = None) -> dict:
         with self.lock:

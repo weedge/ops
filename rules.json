@@ -589,6 +589,52 @@
     "tools": "readonly"
   },
   {
+    "name": "今日线索卡片",
+    "when": {
+      "source": "*",
+      "types": [
+        "lead.batch.ready"
+      ]
+    },
+    "to": "script",
+    "capability": "script",
+    "priority": 2,
+    "command": [
+      "{python}",
+      "-m",
+      "popto_ops.executors.leads",
+      "card"
+    ],
+    "group": "lead-card",
+    "parallel": 1,
+    "timeout": "2m",
+    "tell": "needed",
+    "note": "监听入库后由 opsd 触发；也可手动：opsctl emit lead.batch.ready"
+  },
+  {
+    "name": "线索跟进登记",
+    "when": {
+      "source": "*",
+      "types": [
+        "lead.followup.approved",
+        "lead.followup.dismissed"
+      ]
+    },
+    "to": "script",
+    "capability": "script",
+    "priority": 2,
+    "command": [
+      "{python}",
+      "-m",
+      "popto_ops.executors.leads",
+      "run"
+    ],
+    "group": "lead-followup",
+    "parallel": 1,
+    "timeout": "2m",
+    "tell": "never"
+  },
+  {
     "name": "GEO 检查",
     "when": {
       "source": "cron",
