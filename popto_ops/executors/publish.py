@@ -6,7 +6,8 @@ python -m popto_ops.executors.publish run          # content.publish.approved �
 python -m popto_ops.executors.publish record       # content.published.manual → 人发完后补登记
 
 一期所有平台按“半自动”执行：执行器把发布包整理好推给人，人在手机 / 后台发完后回复
-「已发 <发布包ID> <链接>」（或 opsctl published），执行器补登记并排定数据采集。
+「已发 <发布包ID> <链接>」（或 opsctl published），执行器补登记并排定数据采集。没有链接（视频号）或给的是短链时
+只回「已发 <发布包ID>」也行：数据采集时按标题在创作者后台对上作品，再补上作品 ID。
 自动发布：executors/publishers/（Playwright 驱动创作者后台），按 agents.yaml 的 publishers.<平台>.mode 启用（off / dry_run / live）。
 """
 from __future__ import annotations
@@ -96,7 +97,8 @@ def cmd_batch_card() -> None:
         "proposal": "全部发布（每条都已通过合规复核和视频质检，才会进入发布包）",
         "reasons": ["发布包目录里有标题、正文、话题、封面和渠道码，可在详情里逐条查看"],
         "risks": (["自动发布会直接发到正式账号；失败或登录失效时自动转人工，群里会提醒"] if "live" in modes else []) +
-                 (["人工发布的平台需要你在手机上发，发完回复「已发 发布包ID 链接」以便回收数据"] if modes - {"live"} else []),
+                 (["人工发布的平台需要你在手机上发，发完回复「已发 发布包ID 链接」以便回收数据（视频号没有链接，只回「已发 发布包ID」）"]
+                  if modes - {"live"} else []),
         "items": items,
         "options": [
             {"key": "approve_all", "label": "全部发布",
@@ -155,7 +157,10 @@ def _manual_instructions(p: dict, meta: dict) -> str:
     files = _pack_files(p, meta)
     if files:
         lines.append("- 素材：见下方文件 " + "、".join(f"「{f.name}」" for f in files))
-    lines += ["", f"发完回复：`已发 {p['id']} <链接>`"]
+    if p["platform"] == "wechat_channels":
+        lines += ["", f"发完回复：`已发 {p['id']}`（视频号没有链接，数据采集时按标题自动对上作品）"]
+    else:
+        lines += ["", f"发完回复：`已发 {p['id']} <链接>`（没有链接只回 `已发 {p['id']}` 也行，按标题自动对上作品）"]
     return "\n".join(lines)
 
 
@@ -216,19 +221,20 @@ def cmd_run() -> None:
                 for sp in r.screenshots:
                     hub.notify("file", Path(sp).name, sp, priority=1, ref=f"dryrun-shot:{pack_id}:{Path(sp).name}", dedup=True)
             elif r and r.ok:
+                # 没截到作品 ID 也照样登记（ID 先空着）：数据采集时按标题在创作者后台对上作品，再补上 ID
                 rec = {"platform": p["platform"], "platform_post_id": r.platform_post_id, "url": r.url,
                        "content_id": p["content_id"], "title": p["title"], "publish_mode": "auto",
-                       "channel_code": meta.get("channel_code"),
-                       "post_id": f"{p['platform']}_{r.platform_post_id}" if r.platform_post_id else None}
-                if r.platform_post_id or r.url:
-                    rec["post_id"] = register_post(ops, {k: v for k, v in rec.items() if v is not None})
+                       "channel_code": meta.get("channel_code"), "published_at": iso(),
+                       "post_id": f"{p['platform']}_{r.platform_post_id or pack_id}"[:80]}
+                rec["post_id"] = register_post(ops, {k: v for k, v in rec.items() if v is not None})
                 ops.execute("UPDATE publish_packs SET status='published', updated_at=? WHERE id=?", (iso(), pack_id))
-                ledger.finish(f"publish:{pack_id}", "done", {"url": r.url, "notes": r.notes})
+                ledger.finish(f"publish:{pack_id}", "done", {"url": r.url, "notes": r.notes, "post_id": rec["post_id"]})
+                where = ("链接：" + r.url if r.url else
+                         f"作品 ID：{r.platform_post_id}" if r.platform_post_id else
+                         "没截到作品 ID，数据采集时会按标题在后台自动对上，不用补登记")
                 hub.notify("message", f"✅ {label}已自动发布「{p['title'] or p['content_id']}」",
-                           ("链接：" + r.url if r.url else "没拿到作品链接，发完回复「已发 " + pack_id + " <链接>」补登记") +
-                           "\n\n" + "\n".join(f"- {n}" for n in r.notes), priority=1, ref=f"published:{pack_id}", dedup=True)
-                if rec.get("post_id") and (r.platform_post_id or r.url):
-                    done.append(rec)
+                           where + "\n\n" + "\n".join(f"- {n}" for n in r.notes), priority=1, ref=f"published:{pack_id}", dedup=True)
+                done.append(rec)
                 continue
         ops.execute("UPDATE publish_packs SET status='approved', updated_at=? WHERE id=?", (iso(), pack_id))
         ledger.finish(f"publish:{pack_id}", "awaiting_manual")
@@ -245,17 +251,20 @@ def cmd_run() -> None:
                 + ("；" + "；".join(notes) if notes else ""), follow_up_events=follow, skipped=skipped)
 
 
-def record_manual(pack_id: str, url: str, platform_post_id: str | None = None) -> dict:
+def record_manual(pack_id: str, url: str | None = None, platform_post_id: str | None = None) -> dict:
+    """人发完后补登记。链接里取不到作品 ID（短链、视频号没有链接）时 ID 先空着，数据采集时按标题对上。"""
+    from ..collectors.creator import id_from_url
+
     ops = db.open_ops()
     p = ops.execute("SELECT * FROM publish_packs WHERE id=?", (pack_id,)).fetchone()
     if not p:
         raise SystemExit(f"找不到发布包 {pack_id}")
     p = dict(p)
     meta = _pack_meta(p["pack_dir"])
-    ppid = platform_post_id or url.rstrip("/").split("/")[-1].split("?")[0]
+    ppid = platform_post_id or id_from_url(p["platform"], url)
     rec = {"platform": p["platform"], "platform_post_id": ppid, "url": url, "content_id": p["content_id"],
            "title": p["title"], "publish_mode": "semi_auto", "channel_code": meta.get("channel_code"),
-           "post_id": f"{p['platform']}_{ppid}"[:80], "published_at": iso()}
+           "post_id": f"{p['platform']}_{ppid or pack_id}"[:80], "published_at": iso()}
     ops.execute("UPDATE publish_packs SET status='published', updated_at=? WHERE id=?", (iso(), pack_id))
     ActionLedger(ops).finish(f"publish:{pack_id}", "done", rec)
     return rec
@@ -266,8 +275,8 @@ def cmd_record() -> None:
     recs = []
     for e in lease.get("events") or []:
         d = e.get("data") or {}
-        if d.get("pack_id") and d.get("url"):
-            recs.append(record_manual(d["pack_id"], d["url"], d.get("platform_post_id")))
+        if d.get("pack_id"):
+            recs.append(record_manual(d["pack_id"], d.get("url"), d.get("platform_post_id")))
     follow = [{"type": "social.post.published", "subject": f"post:{r['post_id']}", "summary": f"{r['platform']} 已发布「{r['title']}」",
                "data": r} for r in recs]
     emit_result(f"补登记 {len(recs)} 条人工发布", follow_up_events=follow)

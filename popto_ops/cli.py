@@ -16,7 +16,7 @@
   opsctl decide <C12> <选项序号或key> [原因]
   opsctl note "……"                    记下来：追加 decisions.md
   opsctl demand "……"                  人工转入需求
-  opsctl published <pk_id> <链接>     半自动发布完成后补登记
+  opsctl published <pk_id> [链接]     半自动发布完成后补登记（视频号没有链接，可不填）
   opsctl metrics import <csv>         导入创作者后台导出的数据
   opsctl digest [--hours 24]          中台留底摘要
   opsctl dashboard [--no-open]        生成并打开静态看板
@@ -373,10 +373,10 @@ def main(argv: list[str] | None = None) -> None:
                                                                "summary": " ".join(a.text)[:300], "data": {"text": " ".join(a.text)}}))
     s = sp.add_parser("published")
     s.add_argument("pack_id")
-    s.add_argument("url")
+    s.add_argument("url", nargs="?", help="作品链接；视频号没有链接可不填，数据采集时按标题对上作品")
     s.set_defaults(fn=lambda a: cmd_simple_post("/v1/events", {"source": "opsctl", "type": "content.published.manual",
                                                                "subject": f"pack:{a.pack_id}", "summary": f"已发 {a.pack_id}",
-                                                               "data": {"pack_id": a.pack_id, "url": a.url}}))
+                                                               "data": {"pack_id": a.pack_id, **({"url": a.url} if a.url else {})}}))
     s = sp.add_parser("metrics")
     s.add_argument("action", choices=["import"])
     s.add_argument("csv")

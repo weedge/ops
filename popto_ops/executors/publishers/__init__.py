@@ -35,6 +35,10 @@ class NotLoggedIn(PublishError):
     pass
 
 
+class ProfileBusy(PublishError):
+    """同一平台的登录态目录同一时间只能开一个 Chrome（发布 / 数据采集 / 登录检查会抢）。"""
+
+
 @dataclass
 class PublishResult:
     ok: bool
@@ -58,11 +62,35 @@ def shots_dir(pack_id: str) -> Path:
 
 
 @contextmanager
-def browser(platform: str, *, headless: bool = True, error_shots: Path | None = None):
+def profile_lock(platform: str, wait_s: float = 600):
+    """按平台排队用登录态目录（跨进程文件锁）：发布、数据采集、登录检查不会同时开同一个平台的 Chrome。"""
+    import fcntl
+
+    lock = paths.ops_data() / "browser-profiles" / f".{platform}.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock, "a") as f:
+        deadline = time.time() + max(0.0, wait_s)
+        while True:
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.time() >= deadline:
+                    label = PLATFORMS.get(platform, {}).get("label", platform)
+                    raise ProfileBusy(f"{label}的浏览器正被别的任务占用（发布 / 数据采集 / 登录），等了 {int(wait_s)} 秒")
+                time.sleep(1)
+        try:
+            yield
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def browser(platform: str, *, headless: bool = True, error_shots: Path | None = None, lock_wait: float = 600):
     """本机 Chrome + 该平台的持久化登录态。出错时把当前页面截图到 error_shots（发给人看出错在哪一步）。"""
     from playwright.sync_api import sync_playwright
 
-    with sync_playwright() as p:
+    with profile_lock(platform, lock_wait), sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
             str(profile_dir(platform)), channel="chrome", headless=headless,
             viewport={"width": 1440, "height": 900}, locale="zh-CN", timezone_id="Asia/Shanghai",

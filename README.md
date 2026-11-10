@@ -23,7 +23,7 @@
 | `popto_ops/hub/` | 事件中台：`core.py` 业务逻辑，`server.py` HTTP（127.0.0.1:8787） |
 | `popto_ops/opsd/` | 接单程序：适配器、熔断识别、运行目录与 `input.md`、视频降级预处理 |
 | `popto_ops/notifier/` | 通知出口（console / file / dingtalk / lark）、卡片渲染、钉钉回复监听 |
-| `popto_ops/collectors/` | 指标快照（T+1h/24h/72h/7d + 异常检测）、评论采集、漏斗导入、TikHub 客户端 |
+| `popto_ops/collectors/` | 指标快照（T+1h/24h/72h/7d + 异常检测；抖音 / 视频号 / 小红书读创作者后台 `creator.py`）、评论采集、漏斗导入、TikHub 客户端 |
 | `popto_ops/executors/` | 发布、评论回复、运营清理执行器（只执行已批准、24 小时内、按 action_id 幂等） |
 | `popto_ops/ci/` | CI 中台：发现 Agent MR、审查结论写回、合并闸门、线上核实 |
 | `popto_ops/ingest.py` | Agent 结构化产出 → `ops.db`（Agent 自己不写业务库） |
@@ -69,7 +69,7 @@ dws 目前发的卡片不支持按钮回调，所以卡片以 Markdown 消息发
 | `C12 3 这周人手不够` | 需要原因的选项，原因写在后面（会按选项写进 not-doing.md 或 decisions.md） |
 | `记下来：……` | 追加到 decisions.md |
 | `需求：……` | 人工转入需求池（demand.manual） |
-| `已发 pk_c1_douyin <链接>` | 半自动发布完成后补登记，自动排定数据采集 |
+| `已发 pk_c1_douyin [链接]` | 半自动发布完成后补登记，自动排定数据采集；视频号没有链接、或给的是短链时，采集时按标题在后台对上作品 |
 | `暂停 douyin` / `恢复 douyin` | 暂停 / 恢复某个平台、规则或 Agent 的全部自动化 |
 
 只接受 `approvers` 里的人；同样的操作也可以用 `opsctl decide C12 1`、`opsctl note`、`opsctl demand`、`opsctl published`。互动卡片回调（`user_card_action_triggered`）也已接入监听，dws 支持按钮卡片后可直接使用。
@@ -90,7 +90,7 @@ dws 目前发的卡片不支持按钮回调，所以卡片以 Markdown 消息发
 | 设计阶段 | 状态 |
 | --- | --- |
 | 0 骨架：中台、opsd、规则校验、熔断降级、通知出口、批红、决策档案、日报 | ✅ 已实现并实测：真实 Claude / Codex / Antigravity 都跑通了结构化输出；本机全链路跑通了日报 |
-| 1 数据回收：发布登记、T+1h/24h/72h/7d 快照、异常 → 单条复盘、评论采集与分拣、漏斗导入 | ✅ 框架完成；**自动采集源目前只有抖音（TikHub）**，其他平台用 `opsctl metrics import` 导入创作者后台导出，创作者后台 Playwright 采集器待写 |
+| 1 数据回收：发布登记、T+1h/24h/72h/7d 快照、异常 → 单条复盘、评论采集与分拣、漏斗导入 | ✅ 已实现；抖音 / 视频号 / 小红书的指标直接读创作者后台（复用发布登录态，同一平台的发布 / 采集 / 登录排队用浏览器），抖音读不到时 TikHub 兜底；没有作品 ID 的帖子按「标题 + 发布时间」对上后补登记 ID；评论采集目前只有抖音（TikHub）；其他平台用 `opsctl metrics import` 导入后台导出 |
 | 2 内容流水线：选题 → 脚本 → 合规 → 素材 → 质检 → 发布包 → 17:00 卡片 → 发布 | ✅ 全部事件链与 Skill 已接好；抖音 / 视频号 / 小红书已有 Playwright 自动发布器（`opsctl publish login|check|try`），按平台 `publishers.<平台>.mode` 切换 off / dry_run / live，失败自动转人工；其余平台半自动 |
 | 3 需求与 CI：需求池、Top 10 卡片、PRD、MR 审查 ≤ 3 轮、合并闸门、线上核实 | ✅ 已实现；GitLab 调用未连真实仓库验证（需配置 Token 和项目） |
 | 4 获客：监听、线索、GEO | ✅ Skill 与入库已接好，依赖 Antigravity 浏览器操作；中台迁内网服务器：配置 `hub.host` / `hub.token` 即可 |

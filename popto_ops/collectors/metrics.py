@@ -26,13 +26,28 @@ LATE_TOLERANCE = timedelta(hours=2)   # 登记时某个节点已过点超过这�
 
 
 def register_post(ops, d: dict) -> str:
+    """作品 ID 可以先空着（视频号没有链接、短链解析不出）：采集时按标题在创作者后台对上再补。"""
+    import hashlib
+
+    from .creator import id_from_url
+
     platform = platforms.normalize(d["platform"])
-    ppid = str(d.get("platform_post_id") or d.get("url") or "")
-    pid = d.get("post_id") or f"{platform}_{ppid}"[:80]
+    ppid = str(d.get("platform_post_id") or id_from_url(platform, d.get("url")) or "") or None   # 没有就存 NULL（唯一约束不拦多个 NULL）
     published = d.get("published_at") or iso()
+    known = ppid and ops.execute("SELECT id FROM posts WHERE platform=? AND platform_post_id=?", (platform, ppid)).fetchone()
+    if known:   # 同一条作品已经登记过（比如先按标题对上了 ID，人又回了带链接的“已发”）：沿用原编号
+        pid = known[0]
+    elif d.get("post_id"):
+        pid = d["post_id"]
+    elif ppid:
+        pid = f"{platform}_{ppid}"[:80]
+    else:   # 没有作品 ID：用内容 / 标题 + 发布时间生成稳定编号，免得多条都叫 “<平台>_”
+        key = f"{d.get('content_id') or ''}|{d.get('title') or ''}|{d.get('url') or ''}|{published}"
+        pid = f"{platform}_t{hashlib.sha1(key.encode()).hexdigest()[:12]}"
     ops.execute(
         "INSERT INTO posts(id,content_id,platform,account,platform_post_id,url,title,pillar,published_at,channel_code,publish_mode)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET url=excluded.url, title=COALESCE(excluded.title,title)",
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET url=COALESCE(excluded.url,url),"
+        " title=COALESCE(excluded.title,title), platform_post_id=COALESCE(platform_post_id,excluded.platform_post_id)",
         (pid, d.get("content_id"), platform, d.get("account"), ppid, d.get("url"), d.get("title"), d.get("pillar"),
          published, d.get("channel_code"), d.get("publish_mode", "manual")),
     )
@@ -108,6 +123,47 @@ def save_snapshot(ops, post: dict, cp: str, m: dict, source: str, raw_ref: str |
     return evs
 
 
+def creator_pass(ops, due: list[dict]) -> tuple[dict[str, dict], dict[str, str], dict[str, str]]:
+    """自有作品读创作者后台（有真实播放量），每个平台开一次浏览器取完。
+    返回 ({post_id: 指标}, {平台: 没取到的原因}, {按标题对上的 post_id: 补登记的作品 ID})。"""
+    from . import creator
+
+    got: dict[str, dict] = {}
+    errs: dict[str, str] = {}
+    linked: dict[str, str] = {}
+    for platform in creator.PLATFORMS:
+        posts = {j["pid"]: j for j in due if j["platform"] == platform}
+        if not posts:
+            continue
+        want = {creator.norm_id(platform, j["platform_post_id"]) for j in posts.values()
+                if creator.looks_like_id(platform, j["platform_post_id"])}
+        unknown = [j for j in posts.values() if not creator.looks_like_id(platform, j["platform_post_id"])]
+        since = None
+        if unknown:   # 只按标题找时，翻到比最早那条再早 3 天为止
+            since = min(parse_iso(j["published_at"]) for j in unknown) - timedelta(days=3)
+        try:
+            works = creator.list_works(platform, want, since=since)
+        except Exception as e:  # noqa: BLE001
+            from ..executors.publishers import friendly_error
+            errs[platform] = friendly_error(e)
+            continue
+        by_id = {w["id"]: w for w in works}
+        taken = {creator.norm_id(platform, r[0]) for r in ops.execute(
+            "SELECT platform_post_id FROM posts WHERE platform=? AND platform_post_id<>''", (platform,))}
+        for j in unknown:
+            w = creator.match_title(j["title"] or "", parse_iso(j["published_at"]) if j["published_at"] else None, works, taken)
+            if not w:
+                continue
+            ops.execute("UPDATE posts SET platform_post_id=?, url=COALESCE(url, ?) WHERE id=?", (w["id"], w["url"], j["pid"]))
+            taken.add(w["id"])
+            linked[j["pid"]] = w["id"]
+        for pid, j in posts.items():
+            w = by_id.get(linked.get(pid) or creator.norm_id(platform, j["platform_post_id"]))
+            if w:
+                got[pid] = w["metrics"]
+    return got, errs, linked
+
+
 def cmd_collect() -> None:
     cfg = load_agents_config()
     ops = db.open_ops()
@@ -119,33 +175,29 @@ def cmd_collect() -> None:
     except Exception:  # noqa: BLE001
         used = 0
     due = db.rows(ops.execute(
-        "SELECT j.*, p.platform, p.platform_post_id, p.title, p.id AS pid FROM metric_jobs j JOIN posts p ON p.id=j.post_id"
-        " WHERE j.done_at IS NULL AND j.due_at<=? ORDER BY j.due_at LIMIT 200", (iso(),)))
+        "SELECT j.*, p.platform, p.platform_post_id, p.title, p.published_at, p.id AS pid FROM metric_jobs j"
+        " JOIN posts p ON p.id=j.post_id WHERE j.done_at IS NULL AND j.due_at<=? ORDER BY j.due_at LIMIT 200", (iso(),)))
     events, done, manual, failed = [], 0, [], []
-    # 自有作品优先读抖音创作者后台（有真实播放量），一次会话取完；取不到的再走 TikHub
-    creator: dict[str, dict] = {}
-    dy_ids = {j["platform_post_id"] for j in due if j["platform"] == "douyin" and str(j["platform_post_id"] or "").isdigit()}
-    creator_err = None
-    if dy_ids:
-        try:
-            from .creator import douyin_stats
-            creator = douyin_stats(dy_ids)
-        except Exception as e:  # noqa: BLE001
-            creator_err = str(e)[:200]
+    creator, creator_errs, linked = creator_pass(ops, due) if due else ({}, {}, {})
     for j in due:
         post = {"id": j["pid"], "platform": j["platform"], "title": j["title"]}
+        ppid = str(linked.get(j["pid"]) or j["platform_post_id"] or "")
         try:
-            if j["platform"] == "douyin" and j["platform_post_id"] in creator:
-                events += save_snapshot(ops, post, j["checkpoint"], creator[j["platform_post_id"]], "creator")
+            if j["pid"] in creator:
+                events += save_snapshot(ops, post, j["checkpoint"], creator[j["pid"]], "creator")
                 done += 1
                 continue
-            if j["platform"] == "douyin" and th.configured and j["platform_post_id"].isdigit():
+            if j["platform"] == "douyin" and th.configured and ppid.isdigit():
                 if budget and used + th.requests >= budget:
                     raise RuntimeError("TikHub 今日请求预算已用完")
-                m = th.douyin_video_stats(j["platform_post_id"])
+                m = th.douyin_video_stats(ppid)
                 events += save_snapshot(ops, post, j["checkpoint"], m, "tikhub")
                 done += 1
                 continue
+            if j["platform"] in creator_errs:
+                raise RuntimeError(f"创作者后台没取到：{creator_errs[j['platform']]}")
+            if j["platform"] in ("douyin", "wechat_channels", "xiaohongshu"):
+                raise LookupError("创作者后台作品列表里没找到这条（作品 ID、标题都没对上）")
             raise LookupError("该平台没有可用的自动采集源，需要创作者后台导出或截图识别")
         except Exception as e:  # noqa: BLE001
             ops.execute("UPDATE metric_jobs SET attempts=attempts+1, last_error=? WHERE post_id=? AND checkpoint=?",
@@ -159,8 +211,10 @@ def cmd_collect() -> None:
         except Exception:  # noqa: BLE001
             pass
     parts = [f"采到 {done} 个快照"]
-    if creator_err:
-        parts.append(f"创作者后台没取到（{creator_err}），已用 TikHub 兜底")
+    if linked:
+        parts.append(f"{len(linked)} 条按标题在后台对上了作品，已补登记作品 ID")
+    for pf, err in creator_errs.items():
+        parts.append(f"{platforms.label(pf)}创作者后台没取到（{err}）" + ("，已用 TikHub 兜底" if pf == "douyin" and th.configured else ""))
     if manual:
         parts.append(f"{len(manual)} 个需人工导出（opsctl metrics import）")
     if failed:

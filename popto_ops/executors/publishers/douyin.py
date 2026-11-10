@@ -143,7 +143,7 @@ def publish(pack: dict, meta: dict, *, dry_run: bool, shots: Path, headless: boo
         res.platform_post_id = aid or None
         res.url = f"https://www.douyin.com/video/{aid}" if aid else None
         res.ok = True
-        res.notes.append("已发布" + ("" if aid else "（没拿到作品 ID，需人工补登记链接）"))
+        res.notes.append("已发布" + ("" if aid else "（没截到作品 ID，数据采集时会按标题在后台自动对上）"))
         if not aid:
             res.notes.append("发布接口返回：" + json.dumps(created, ensure_ascii=False)[:200])
         return res

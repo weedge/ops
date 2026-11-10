@@ -4,7 +4,7 @@
   C12 1 [原因]            批卡片 C12，选第 1 个选项（也可写选项 key）
   记下来：……              追加到 decisions.md
   需求：……                转成 demand.manual 进需求池
-  已发 pk_xxx <链接>      半自动发布完成后补登记
+  已发 pk_xxx [链接]      半自动发布完成后补登记（视频号没有链接，只回「已发 pk_xxx」）
   暂停 <规则/平台/agent>  /  恢复 <…>
 互动卡片按钮回调（user_card_action_triggered）里的 context 带 card_id / choice 时同样生效。
 """
@@ -29,7 +29,7 @@ log = logging.getLogger("dingtalk-events")
 RE_CARD = re.compile(r"^\s*(?:批\s*)?[Cc](\d+)\s+(\S+)(?:\s+(.+))?\s*$", re.S)
 RE_NOTE = re.compile(r"^\s*记下来\s*[:：]\s*(.+)$", re.S)
 RE_DEMAND = re.compile(r"^\s*需求\s*[:：]\s*(.+)$", re.S)
-RE_PUBLISHED = re.compile(r"^\s*已发\s+(pk_\S+)\s+(\S+)\s*$")
+RE_PUBLISHED = re.compile(r"^\s*已发\s+(pk_\S+)(?:\s+(\S+))?\s*$")
 RE_PAUSE = re.compile(r"^\s*(暂停|恢复)\s+(\S+)\s*$")
 
 TEXT_KEYS = ("text", "content", "msgContent", "message")
@@ -73,7 +73,7 @@ def parse_command(text: str) -> dict | None:
                 "data": {"text": m.group(1).strip()}}
     if m := RE_PUBLISHED.match(text):
         return {"type": "content.published.manual", "subject": f"pack:{m.group(1)}", "summary": text[:200],
-                "data": {"pack_id": m.group(1), "url": m.group(2)}}
+                "data": {"pack_id": m.group(1), "url": m.group(2)} if m.group(2) else {"pack_id": m.group(1)}}
     if m := RE_PAUSE.match(text):
         return {"type": "_pause" if m.group(1) == "暂停" else "_resume", "key": m.group(2)}
     return None

@@ -544,3 +544,174 @@ def test_late_snapshots_never_flag_anomaly(home):
     pid = metrics.register_post(ops, {"platform": "douyin", "platform_post_id": "big", "published_at": "2026-08-01T10:00:00+08:00"})
     evs = metrics.save_snapshot(ops, {"id": pid, "platform": "douyin", "title": "x"}, "late", {"views": 5000}, "creator")
     assert not any(e["type"] == "social.metrics.anomaly" for e in evs)
+
+
+# ---------------------------------------------------------------- 创作者后台取数（抖音 / 视频号 / 小红书）
+
+def test_creator_work_parsers():
+    from popto_ops.collectors import creator
+    ch = creator.channels_work({
+        "objectId": "export/UzFfBgAAxOqpYGQFKkuKk8zT4DCawndAq-Garu-K698IVXkEFA", "createTime": 1794164679,
+        "readCount": 189, "likeCount": 2, "favCount": 5, "commentCount": 0, "forwardCount": 1, "followCount": 3,
+        "fullPlayRate": 0.06, "avgPlayTimeSec": 7.5,
+        "desc": {"shortTitle": [{"shortTitle": "爆款兔批量生成数字人口播"}], "description": "#爆款兔 欢迎使用"}})
+    assert ch["id"] == "UzFfBgAAxOqpYGQFKkuKk8zT4DCawndAq-Garu-K698IVXkEFA"   # 去掉 export/ 前缀，免得作品编号里带斜杠
+    assert ch["metrics"] == {"views": 189, "likes": 2, "comments": 0, "shares": 1, "follows_gained": 3,
+                             "completion_rate": 0.06, "avg_watch_sec": 7.5}             # 推荐👍（favCount）不当收藏
+    assert ch["created"].strftime("%Y-%m-%d %H:%M") == "2026-11-09 03:04" and ch["titles"][0] == "爆款兔批量生成数字人口播"
+    xn = creator.xhs_work({"id": "6adf5297000000001703a027", "display_title": "今天分享：爆款内容流水线♻️",
+                           "time": "2026-10-26 21:16", "view_count": 10, "likes": 1, "collected_count": 0,
+                           "comments_count": 1, "shared_count": 1})
+    assert xn["url"] == "https://www.xiaohongshu.com/explore/6adf5297000000001703a027" and xn["created"].hour == 21
+    assert xn["metrics"] == {"views": 10, "likes": 1, "comments": 1, "shares": 1, "favorites": 0}
+    dy = creator.douyin_work({"aweme_id": "7680223353274362362", "create_time": 1788191347, "item_title": "生日快乐",
+                              "desc": "生日快乐 #周星驰", "statistics": {"play_count": 165, "digg_count": 3,
+                                                                       "comment_count": 1, "share_count": 0, "collect_count": 0}})
+    assert dy["metrics"]["views"] == 165 and dy["url"] == "https://www.douyin.com/video/7680223353274362362"
+
+
+def test_creator_title_matching():
+    from datetime import timedelta
+
+    from popto_ops.collectors import creator
+    from popto_ops.executors.publishers.channels import short_title
+    from popto_ops.timeutil import parse_iso
+    pub = parse_iso("2026-11-10T19:00:00+08:00")
+    title = "保险人 3 分钟做完一条口播，客户追着问！"
+
+    def w(i, titles, hours):
+        return {"id": i, "titles": titles, "created": pub + timedelta(hours=hours), "metrics": {}, "url": None}
+    works = [w("new", [short_title(title), "正文第一行"], 0.2),        # 视频号短标题：去符号、截 16 字
+             w("old", [short_title(title), ""], -24 * 10),              # 十天前同名的旧作品：超出时间窗
+             w("other", ["完全不相关的标题"], 0)]
+    assert creator.match_title(title, pub, works)["id"] == "new"
+    assert creator.match_title(title, pub, works, taken={"new"}) is None      # 已被别的记录占用
+    assert creator.match_title(title, pub, [w("x", [title.replace(" ", "")[:20]], 1)])["id"] == "x"   # 小红书截 20 字
+    assert creator.pick_new_work(title, pub - timedelta(minutes=10), works)["id"] == "new"
+    assert creator.pick_new_work(title, pub + timedelta(hours=1), works) is None
+    assert not creator.same_title("测试", ["测试 测试"])                        # 太短不模糊匹配
+    assert creator.same_title("生日快乐", ["生日快乐 #周星驰祝你生日快乐"]) is False
+    assert creator.same_title("生日快乐", ["生日快乐"])
+
+
+def test_post_ids_from_links_and_bare_published_reply():
+    from popto_ops.collectors.creator import id_from_url, looks_like_id
+    assert id_from_url("douyin", "https://www.douyin.com/video/7680223353274362362?previous_page=x") == "7680223353274362362"
+    assert id_from_url("douyin", "https://v.douyin.com/abc/") is None                        # 短链：之后按标题对
+    assert id_from_url("xiaohongshu", "https://www.xiaohongshu.com/explore/6adf5297000000001703a027?xsec_token=x") \
+        == "6adf5297000000001703a027"
+    assert id_from_url("xiaohongshu", "http://xhslink.com/a/AbCd") is None
+    assert id_from_url("wechat_channels", None) is None
+    assert looks_like_id("wechat_channels", "export/UzFfBgAAxOqpYGQFKkuKk8zT4DCawndAq-Garu-K698IVXkEFA")
+    assert not looks_like_id("douyin", "https://v.douyin.com/abc/") and not looks_like_id("xiaohongshu", "")
+    assert parse_command("已发 pk_c1_wechat_channels")["data"] == {"pack_id": "pk_c1_wechat_channels"}
+    assert parse_command("已发 pk_c1_douyin https://v.douyin.com/abc/")["data"]["url"] == "https://v.douyin.com/abc/"
+
+
+def test_record_manual_without_link(home, tmp_path):
+    from popto_ops.executors.publish import record_manual
+    ops = db.open_ops()
+    for pid, pf in (("pk_v_wechat_channels", "wechat_channels"), ("pk_x_xiaohongshu", "xiaohongshu")):
+        ops.execute("INSERT INTO publish_packs(id,content_id,platform,title,pack_dir,publish_mode,status) VALUES (?,?,?,?,?,?,?)",
+                    (pid, "c", pf, "标题", str(tmp_path), "semi_auto", "approved"))
+    ops.commit()
+    r = record_manual("pk_v_wechat_channels")
+    assert r["post_id"] == "wechat_channels_pk_v_wechat_channels" and r["platform_post_id"] is None and r["url"] is None
+    r = record_manual("pk_x_xiaohongshu", "https://www.xiaohongshu.com/explore/6adf5297000000001703a027?xsec_token=x")
+    assert r["platform_post_id"] == "6adf5297000000001703a027" and r["post_id"] == "xiaohongshu_6adf5297000000001703a027"
+
+
+def test_collect_reads_creator_backends_and_links_by_title(home, monkeypatch):
+    from popto_ops.collectors import creator
+    from popto_ops.timeutil import parse_iso
+    ops = db.open_ops()
+    at("2026-11-10 20:30")
+    ch = metrics.register_post(ops, {"platform": "wechat_channels", "post_id": "wechat_channels_pk_v", "platform_post_id": "",
+                                     "title": "保险人 3 分钟做完一条口播", "published_at": "2026-11-10T19:20:00+08:00"})
+    xh = metrics.register_post(ops, {"platform": "xiaohongshu", "platform_post_id": "6adf5297000000001703a027",
+                                     "title": "爆款内容流水线", "published_at": "2026-11-10T19:25:00+08:00"})
+    dy = metrics.register_post(ops, {"platform": "douyin", "platform_post_id": "7680223353274362362", "title": "生日快乐",
+                                     "published_at": "2026-11-10T19:10:00+08:00"})
+    ops.commit()
+    calls = []
+
+    def fake_list(platform, want, *, since=None, **k):
+        calls.append((platform, set(want), since))
+        if platform == "douyin":
+            raise RuntimeError("抖音创作者后台返回 status_code=8（多半是登录失效）")
+        if platform == "wechat_channels":
+            return [{"id": "UzFfNEW" + "x" * 30, "titles": ["保险人 3 分钟做完一条口播", ""], "url": None,
+                     "created": parse_iso("2026-11-10T19:21:00+08:00"), "metrics": {"views": 300, "likes": 9}}]
+        return [{"id": "6adf5297000000001703a027", "titles": ["爆款内容流水线"], "url": "u",
+                 "created": parse_iso("2026-11-10T19:25:00+08:00"), "metrics": {"views": 40, "favorites": 2}}]
+    monkeypatch.setattr(creator, "list_works", fake_list)
+
+    class NoTikHub:
+        configured, requests = False, 0
+
+        def __init__(self, *a, **k):
+            pass
+    monkeypatch.setattr(metrics, "TikHub", NoTikHub)          # 别碰本机钥匙串里的真 Key
+    monkeypatch.setattr(metrics, "hub_client", lambda: FakeHub())
+    out = {}
+    monkeypatch.setattr(metrics, "emit_result", lambda summary, **k: out.update(summary=summary, **k))
+    metrics.cmd_collect()
+    by_pf = {c[0]: c for c in calls}
+    assert by_pf["wechat_channels"][1] == set() and by_pf["wechat_channels"][2] is not None   # 没有 ID：按标题找，翻到发布前 3 天
+    assert by_pf["xiaohongshu"][1] == {"6adf5297000000001703a027"} and by_pf["xiaohongshu"][2] is None
+    assert ops.execute("SELECT platform_post_id FROM posts WHERE id=?", (ch,)).fetchone()[0] == "UzFfNEW" + "x" * 30
+    snaps = {r[0]: (r[1], r[2]) for r in ops.execute("SELECT post_id, views, source FROM post_metrics WHERE checkpoint='1h'")}
+    assert snaps[ch] == (300, "creator") and snaps[xh] == (40, "creator") and dy not in snaps
+    assert "1 条按标题在后台对上了作品" in out["summary"] and "抖音创作者后台没取到" in out["summary"]
+    assert out["failed"] == [f"{dy}@1h"]
+
+
+def test_live_publish_without_post_id_still_registers(home, monkeypatch, tmp_path):
+    from popto_ops.executors import publish, publishers as pubs
+    ops = db.open_ops()
+    ops.execute("INSERT INTO publish_packs(id,content_id,platform,title,pack_dir,publish_mode,status) VALUES "
+                "('pk_v_wechat_channels','c','wechat_channels','保险人 3 分钟做完一条口播',?, 'semi_auto','carded')", (str(tmp_path),))
+    ops.commit()
+    sent, out = [], {}
+    monkeypatch.setattr(publish, "hub_client", lambda: type("H", (), {"notify": lambda self, k, t, b, **kw: sent.append((k, t, b))})())
+    monkeypatch.setattr(publish, "emit_result", lambda summary, **k: out.update(summary=summary, **k))
+    monkeypatch.setattr(publish, "load_task", lambda: {"task": {"id": "t"}, "events": [
+        {"data": {"pack_id": "pk_v_wechat_channels"}, "received_at": iso()}]})
+    monkeypatch.setattr("popto_ops.config.load_agents_config", lambda *a, **k: {"publishers": {"wechat_channels": {"mode": "live"}}})
+    monkeypatch.setattr(pubs, "run", lambda *a, **k: pubs.PublishResult(ok=True, dry_run=False, notes=["已发表"]))
+    publish.cmd_run()
+    post = ops.execute("SELECT * FROM posts WHERE id='wechat_channels_pk_v_wechat_channels'").fetchone()
+    assert post is not None and post["platform_post_id"] is None and post["publish_mode"] == "auto"
+    assert ops.execute("SELECT COUNT(*) FROM metric_jobs WHERE post_id=?", (post["id"],)).fetchone()[0] == 4
+    assert out["follow_up_events"][0]["type"] == "social.post.published"
+    assert any("按标题在后台自动对上" in b for k, t, b in sent if t.startswith("✅"))
+
+
+def test_profile_lock_serializes_one_platform(home):
+    import pytest
+
+    from popto_ops.executors.publishers import ProfileBusy, profile_lock
+    with profile_lock("wechat_channels", 0):
+        with pytest.raises(ProfileBusy):
+            with profile_lock("wechat_channels", 0):
+                pass
+        with profile_lock("xiaohongshu", 0):      # 不同平台互不影响
+            pass
+    with profile_lock("wechat_channels", 0):      # 释放后能再拿到
+        pass
+
+
+def test_register_post_without_id_gets_unique_id(home):
+    ops = db.open_ops()
+    at("2026-11-10 10:00")
+    a = metrics.register_post(ops, {"platform": "视频号", "title": "A 标题", "published_at": "2026-11-10T09:00:00+08:00"})
+    b = metrics.register_post(ops, {"platform": "视频号", "title": "B 标题", "published_at": "2026-11-10T09:00:00+08:00"})
+    assert a != b and a.startswith("wechat_channels_t")
+    assert ops.execute("SELECT platform_post_id FROM posts WHERE id=?", (a,)).fetchone()[0] is None
+    # 后来拿到了作品 ID（人回了带链接的“已发”）：同一编号补上 ID，不另起一条
+    again = metrics.register_post(ops, {"platform": "wechat_channels", "post_id": a, "platform_post_id": "U" * 40})
+    assert again == a and ops.execute("SELECT platform_post_id FROM posts WHERE id=?", (a,)).fetchone()[0] == "U" * 40
+    assert metrics.register_post(ops, {"platform": "wechat_channels", "post_id": "other", "platform_post_id": "U" * 40}) == a
+    x = metrics.register_post(ops, {"platform": "xiaohongshu",
+                                    "url": "https://www.xiaohongshu.com/explore/6adf5297000000001703a027?xsec_token=1"})
+    assert x == "xiaohongshu_6adf5297000000001703a027"

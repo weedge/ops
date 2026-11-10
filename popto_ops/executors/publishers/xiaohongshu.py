@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 from pathlib import Path
 
+from ...timeutil import now
 from . import NotLoggedIn, PublishError, PublishResult, browser, is_logged_in, open_until, stamp
 
 URL = "https://creator.xiaohongshu.com/publish/publish?source=official"
@@ -108,6 +110,7 @@ def publish(pack: dict, meta: dict, *, dry_run: bool, shots: Path, headless: boo
             res.notes.append("试运行：已填好，停在“发布”前，没有发布")
             return res
 
+        clicked = now() - timedelta(minutes=10)   # 本机和平台时钟可能差几分钟；小红书笔记时间只到分钟
         page.get_by_text("发布", exact=True).last.click()
         try:
             page.wait_for_url(re.compile(r".*/publish/success.*|.*/new/note-manager.*"), timeout=180000)
@@ -117,5 +120,35 @@ def publish(pack: dict, meta: dict, *, dry_run: bool, shots: Path, headless: boo
         page.wait_for_timeout(2000)
         _shot(page, shots, "published", res)
         res.ok = True
-        res.notes.append("已发布（笔记链接需人工补登记或从后台导出数据）")
+        found = _find_posted(page, pack.get("title") or "", clicked)
+        if found:
+            res.platform_post_id, res.url = found["id"], found["url"]
+            res.notes.append("已发布，笔记 ID 已记下")
+        else:
+            res.notes.append("已发布；笔记管理里暂时没认出这条，数据采集时会按标题自动对上")
         return res
+
+
+def _find_posted(page, title: str, after) -> dict | None:
+    """发布后打开笔记管理，从页面自己拉的笔记列表里认出刚发的这条（审核中的也在“全部”里）。认不出不算失败。"""
+    from ...collectors.creator import XHS_NOTES, pick_new_work, xhs_work
+
+    notes: list[dict] = []
+
+    def on_resp(r):
+        if "/note/user/posted" in r.url:
+            try:
+                notes.extend(((r.json().get("data") or {}).get("notes")) or [])
+            except Exception:  # noqa: BLE001
+                pass
+    try:
+        page.on("response", on_resp)
+        page.goto(XHS_NOTES, wait_until="commit", timeout=60000)
+        for _ in range(20):
+            page.wait_for_timeout(1000)
+            found = pick_new_work(title, after, [xhs_work(n) for n in notes])
+            if found:
+                return found
+    except Exception:  # noqa: BLE001
+        pass
+    return None

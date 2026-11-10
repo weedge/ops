@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 from pathlib import Path
 
+from ...timeutil import now
 from . import NotLoggedIn, PublishError, PublishResult, browser, is_logged_in, open_until, stamp
 
 HOME = "https://channels.weixin.qq.com/platform"
@@ -116,14 +118,35 @@ def publish(pack: dict, meta: dict, *, dry_run: bool, shots: Path, headless: boo
             res.notes.append("试运行：已填好，停在“发表”前，没有发表")
             return res
 
+        from ...collectors.creator import channels_work, pick_new_work
+
+        listed: list[dict] = []
+
+        def on_resp(r):   # 发表后跳到内容管理页，页面会拉作品列表：从里面认出刚发的这条，记下作品 ID
+            if r.url.split("?")[0].endswith("/post/post_list"):
+                try:
+                    listed.extend(((r.json().get("data") or {}).get("list")) or [])
+                except Exception:  # noqa: BLE001
+                    pass
+        page.on("response", on_resp)
+        clicked = now() - timedelta(minutes=10)   # 本机和平台时钟可能差几分钟
         btn.first.click()
         try:
             page.wait_for_url(re.compile(r".*/platform/post/list.*"), timeout=180000)
         except Exception:  # noqa: BLE001
             _shot(page, shots, "after-publish", res)
             raise PublishError("点了发表，但没有跳到内容管理页，请到视频号助手确认是否发出")
-        page.wait_for_timeout(3000)
+        found = None
+        for _ in range(15):
+            page.wait_for_timeout(1000)
+            found = pick_new_work(pack.get("title") or "", clicked, [channels_work(x) for x in listed])
+            if found:
+                break
         _shot(page, shots, "published", res)
         res.ok = True
-        res.notes.append("已发表（视频号没有公开作品链接，需人工补登记或从后台导出数据）")
+        if found:
+            res.platform_post_id = found["id"]
+            res.notes.append("已发表，作品 ID 已记下（视频号没有公开链接，数据从视频号助手取）")
+        else:
+            res.notes.append("已发表；内容管理页里暂时没认出这条，数据采集时会按标题自动对上")
         return res
