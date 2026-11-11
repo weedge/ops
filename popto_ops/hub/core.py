@@ -396,6 +396,10 @@ class Hub:
                 self._notify_failed(t, rule, tried)
                 continue
             pick = None
+            # 不可用（熔断、暂停、本机没有）直接顺延；只是忙（并发满）就先排队等：
+            # 等满 overflow_after 才允许交给链上下一个，每多等一个 overflow_after 最多再往后顺延一位
+            steps = self._overflow_steps(t, rule)
+            busy_seen = 0
             for a in remaining:
                 if agents is not None and a not in agents:
                     continue
@@ -405,6 +409,9 @@ class Hub:
                 if self.is_paused(f"agent:{a}"):
                     continue
                 if agent_running.get(a, 0) >= int((agent_cfg.get(a) or {}).get("concurrency", 1)):
+                    busy_seen += 1
+                    if busy_seen > steps:
+                        break
                     continue
                 pick = a
                 break
@@ -420,6 +427,24 @@ class Hub:
                 continue
             return self._lease_payload(t["id"], rule, pick, chain)
         return None
+
+    def _overflow_steps(self, t, rule: dict) -> int:
+        """排队等了几个 overflow_after（默认 10 分钟，规则里可单独设；0 表示不等，忙就顺延）。
+        从可以派单的时刻算起：进队 / 重新进队（updated_at）和防抖结束（not_before）取较晚的。"""
+        raw = rule.get("overflow_after")
+        if raw is None:
+            raw = (self.cfg.get("hub") or {}).get("overflow_after")
+        try:
+            wait = parse_duration(raw, timedelta(minutes=10))
+        except ValueError:
+            wait = timedelta(minutes=10)
+        if not wait or wait.total_seconds() <= 0:
+            return 1 << 30
+        stamps = [s for s in (t["updated_at"] or t["created_at"], t["not_before"]) if s]
+        if not stamps:
+            return 0
+        waited = (now() - max(parse_iso(s) for s in stamps)).total_seconds()
+        return max(0, int(waited // wait.total_seconds()))
 
     def _upstream_pending(self, t, rule: dict) -> bool:
         """wait_for：比本任务先创建的上游任务（如日报依赖的采集）还没跑完就先不派，最多等 wait_max（默认 30m）。"""

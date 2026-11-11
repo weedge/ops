@@ -66,8 +66,41 @@ def test_agent_concurrency(hub):
     hub.ingest(comment_evt("post:b", "kb"))
     at("2026-11-10 10:11")
     first = hub.lease("w", None)
+    assert first["agent"] == "claude"
+    assert hub.lease("w", None) is None              # Claude 只是忙：先排队，不马上交给 Codex
+    at("2026-11-10 10:20")                           # 从防抖结束（10:10）算，等满 10 分钟才顺延
     second = hub.lease("w", None)
-    assert first["agent"] == "claude" and second["agent"] == "codex" and second["is_fallback"]
+    assert second["agent"] == "codex" and second["is_fallback"]
+
+
+def test_busy_primary_overflows_one_step_per_wait(hub):
+    """写作链 claude → codex → antigravity → workbuddy：都忙时每多等 10 分钟最多往后一位，不一下子掉到最弱的。"""
+    for a in ("claude", "codex", "antigravity"):
+        hub.cfg["agents"][a]["concurrency"] = 1
+    rule = next(r for r in hub.rules if r["name"] == "选题批准后写脚本")
+    rule["parallel"] = 10
+    at("2026-11-10 10:00")
+    for i in range(4):
+        hub.ingest({"source": "hub", "type": "content.topic.approved", "subject": f"content:c_2026111{i}_01",
+                    "data": {"content_id": f"c_2026111{i}_01"}, "dedup_key": f"t{i}"})
+    got = [hub.lease("w", None) for _ in range(4)]
+    assert [g["agent"] if g else None for g in got] == ["claude", None, None, None]
+    at("2026-11-10 10:10")
+    assert hub.lease("w", None)["agent"] == "codex"
+    assert hub.lease("w", None) is None              # antigravity 还要再等一个 10 分钟
+    at("2026-11-10 10:20")
+    assert hub.lease("w", None)["agent"] == "antigravity"
+    rule["overflow_after"] = "0"                     # 规则可以关掉等待：忙就顺延
+    assert hub.lease("w", None)["agent"] == "workbuddy"
+
+
+def test_unavailable_primary_falls_through_without_waiting(hub):
+    at("2026-11-10 10:00")
+    hub.ingest(comment_evt("post:z", "kz"))
+    at("2026-11-10 10:11")
+    hub.pause("agent:claude", "测试")
+    t = hub.lease("w", None)
+    assert t["agent"] == "codex" and t["is_fallback"]
 
 
 def test_quota_opens_circuit_and_falls_back(hub):

@@ -99,7 +99,8 @@
     "context": [
       "ops_metrics",
       "demands",
-      "hub_digest_week"
+      "hub_digest_week",
+      "popto_help"
     ],
     "effort": "high",
     "group": "topic-planning",
@@ -122,7 +123,8 @@
     "skill": "ops-topic-planning",
     "ask": "按 Skill 中“上新内容”一节处理。",
     "context": [
-      "event_payload"
+      "event_payload",
+      "popto_help"
     ],
     "effort": "medium",
     "group": "release-topic",
@@ -146,7 +148,8 @@
     "skill": "ops-script-writing",
     "ask": "按 Skill 中“被事件中台叫起来的”一节处理，写完发 content.script.ready。",
     "context": [
-      "event_payload"
+      "event_payload",
+      "popto_help"
     ],
     "effort": "high",
     "group": "content:{subject}",
@@ -169,7 +172,9 @@
     "skill": "ops-script-writing",
     "ask": "修改模式：只改合规意见指出的地方，改完再发 content.script.ready。",
     "context": [
-      "event_payload"
+      "event_payload",
+      "event_scripts",
+      "popto_help"
     ],
     "effort": "medium",
     "group": "content:{subject}",
@@ -193,7 +198,9 @@
     "skill": "ops-compliance-review",
     "ask": "只报会出问题的，不改文风。",
     "context": [
-      "event_payload"
+      "event_payload",
+      "event_scripts",
+      "popto_help"
     ],
     "effort": "high",
     "group": "content:{subject}",

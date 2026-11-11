@@ -18,7 +18,7 @@ from ..validate import build_schema, validate
 from . import breaker, video_prep
 from .agents import RunResult, RunSpec, adapter_for
 from .client import HubClient
-from .context import ContextBuilder, build_input_md
+from .context import ContextBuilder, build_input_md, load_skill_text, normalize_script_paths
 
 log = logging.getLogger("opsd")
 
@@ -270,8 +270,8 @@ class Worker:
             if self._uses_browser(rule, acfg):
                 notes.append(agent_browser.agent_note(self.cfg))
             if lease.get("is_fallback"):
-                notes.append(f"你是降级接手的 Agent（主 Agent 不可用）。")
-            skill_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+                notes.append("你是降级接手的 Agent（主 Agent 不可用，或忙得排队太久）。")
+            skill_text = load_skill_text(skill_dir)
             structured = bool(acfg.get("structured_output", acfg.get("type") == "claude"))
             cwd = Path(os.path.expanduser(rule.get("cwd") or str(self.home)))
             if rule.get("tools", "readonly") == "readonly":
@@ -373,6 +373,7 @@ class Worker:
         res.output, hits = redact.redact_obj(res.output)
         if hits:
             log.warning("任务输出里有 %d 处 Cookie / token / 手机号，已打码（%s）", hits, run_dir.name)
+        normalize_script_paths(res.output, run_dir)
         p = run_dir / "output.json"
         p.write_text(json.dumps(res.output, ensure_ascii=False, indent=1), encoding="utf-8")
         return res, p

@@ -8,6 +8,8 @@ hub:
   lease_seconds: 120          # 租约 2 分钟，续租失败任务回到队列
   long_poll_seconds: 50       # opsd 单次最长等 50 秒
   max_lease_losses: 3         # 同一任务丢租约超过 3 次即判失败（防止崩溃循环）
+  overflow_after: 10m         # 主力只是忙（并发满）时先排队，等满 10 分钟才交给链上下一个，每多等 10 分钟最多再往后一位；
+                              # 熔断 / 暂停 / 本机没有的 Agent 不等，直接顺延。规则里可单独设 overflow_after，0 = 不等
 
 worker:
   name: mac-main
@@ -23,6 +25,7 @@ path: "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 external_skill_dirs:          # Popto 现有产品 Skills，被 ops 规则直接引用，不复制
   - "../skills"
+popto_help_dir: "../docs/popto-help"   # Popto 帮助文档：写脚本 / 复核 / 排选题时复制进 context/popto-help/ 核对产品事实
 
 # Agent 通过本机包装脚本启动（与终端里 claude / codex / agy 别名一致），代理由包装脚本自己设置。
 # 包装脚本会加全权限参数；opsd 追加的档位参数实测能否收紧：

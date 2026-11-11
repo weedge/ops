@@ -19,11 +19,11 @@ EFFORT = {"low", "medium", "high", "xhigh", "max"}
 RULE_KEYS = {
     "name", "when", "to", "fallback", "capability", "priority", "cwd", "skill", "ask", "context",
     "effort", "model", "group", "debounce", "parallel", "timeout", "tell", "tools", "max_rounds",
-    "command", "note", "credits_per_run", "enabled", "wait_for", "wait_max", "worktree",
+    "command", "note", "credits_per_run", "enabled", "wait_for", "wait_max", "worktree", "overflow_after",
 }
 CONTEXT_PROVIDERS = {
     "hub_digest", "hub_digest_week", "ops_metrics", "unread_feedback", "demands", "event_payload",
-    "event_media", "listening_terms", "budget_popto_credits", "mr_diff",
+    "event_media", "listening_terms", "budget_popto_credits", "mr_diff", "event_scripts", "popto_help",
 }
 
 
@@ -180,7 +180,7 @@ def check_config(home: Path | None = None) -> CheckReport:
             rep.errors.append(f"{tag} tools 只能是 {sorted(TOOLS)}")
         if "effort" in r and r["effort"] not in EFFORT:
             rep.errors.append(f"{tag} effort 只能是 {sorted(EFFORT)}")
-        for k in ("debounce", "timeout"):
+        for k in ("debounce", "timeout", "overflow_after"):
             if k in r:
                 try:
                     parse_duration(r[k])

@@ -202,6 +202,58 @@ class ContextBuilder:
             else:
                 self._write(name, data, f"{ref} 的内容")
 
+    def p_event_scripts(self, lease, events):
+        """事件里带 script_paths（脚本复核、合规打回改稿）：把原稿所在的 scripts/<内容>/ 整个目录（含 benchmark.md
+        这类同一内容的共用文件）复制进本轮目录。Agent 的权限只覆盖本轮目录，跨目录读写会被拦。
+        改稿（content.script.revise）复制到 scripts/<内容>/，直接在副本上改；复核复制到 context/scripts/<内容>/ 只作参考。"""
+        task = lease.get("task") or {}
+        for e in events:
+            d = e.get("data") if isinstance(e.get("data"), dict) else {}
+            if not d.get("script_paths"):
+                continue
+            revise = e.get("type") == "content.script.revise"
+            base = self.run_dir / "scripts" if revise else self.ctx_dir / "scripts"
+            copied: dict[Path, Path] = {}
+            for sp in d["script_paths"]:
+                src = resolve_run_path(sp, [d.get("parent_task"), task.get("parent_task")])
+                if not src:
+                    self.files.append((f"（找不到原稿 {sp}）", "事件里的路径在运行目录里不存在"))
+                    continue
+                folder = src.parent
+                if folder.parent.name == "scripts":  # runs/<任务>/scripts/<内容>/：整个目录带上
+                    if folder not in copied:
+                        shutil.copytree(folder, base / folder.name, dirs_exist_ok=True)
+                        copied[folder] = base / folder.name
+                else:
+                    base.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, base / src.name)
+                    copied.setdefault(src, base / src.name)
+            data_root = paths.ops_data().resolve()
+            for src, dst in copied.items():
+                rel, src_rel = dst.relative_to(self.run_dir), src.relative_to(data_root)
+                if revise:
+                    self.files.append((f"{rel}/" if dst.is_dir() else str(rel),
+                                       f"上一版原稿（从 {src_rel} 复制过来，含同一内容的共用文件）：直接在这些文件上改，"
+                                       "只改被指出的地方，不要整篇重写"))
+                else:
+                    self.files.append((f"{rel}/" if dst.is_dir() else str(rel), f"待复核的脚本（复制件，原稿在 {src_rel}）"))
+
+    def p_popto_help(self, lease, events):
+        """Popto 帮助文档（功能入口、步骤、积分、限制）：写脚本、复核、排选题时核对产品事实。只复制文字，不带截图。"""
+        from ..config import load_agents_config
+
+        src = popto_help_dir(load_agents_config())
+        docs = sorted(src.glob("*.md")) if src and src.is_dir() else []
+        if not docs:
+            self.files.append(("（Popto 帮助文档没找到）", f"agents.yaml 的 popto_help_dir：{src}"))
+            return
+        dst = self.ctx_dir / "popto-help"
+        dst.mkdir(exist_ok=True)
+        for f in docs:
+            shutil.copy2(f, dst / f.name)
+        self.files.append(("context/popto-help/", f"Popto 帮助文档 {len(docs)} 篇（README.md 是功能地图）："
+                                                   "产品功能的入口、步骤、积分、限制以这里为准，文档里没有的不要编"))
+
     def p_event_media(self, lease, events):
         media = self.run_dir / "media"
         for e in events:
@@ -289,3 +341,79 @@ def build_input_md(lease: dict, *, skill_name: str, skill_text: str, schema: dic
 
 def data_dir() -> Path:
     return paths.ops_data()
+
+
+def popto_help_dir(cfg: dict) -> Path | None:
+    """帮助文档目录：agents.yaml 的 popto_help_dir，相对路径按代码仓库算（默认 ../docs/popto-help）。"""
+    p = paths.expand(cfg.get("popto_help_dir") or "../docs/popto-help")
+    if p is None:
+        return None
+    return (p if p.is_absolute() else paths.ops_home() / p).resolve()
+
+
+def resolve_run_path(p, run_ids=()) -> Path | None:
+    """脚本路径 → 实际文件。支持绝对路径、相对数据目录（runs/<任务>/…）、相对某个运行目录（scripts/…）。
+    只认数据目录 runs/ 下的文件：事件里的路径不能把别处的文件带进运行目录。"""
+    if not p or not isinstance(p, str):
+        return None
+    root = paths.ops_data().resolve()
+    runs = root / "runs"
+    q = Path(p).expanduser()
+    cands = [q] if q.is_absolute() else [root / q] + [runs / r / q for r in run_ids if r]
+    for c in cands:
+        try:
+            r = c.resolve()
+            r.relative_to(runs)
+        except (OSError, ValueError):
+            continue
+        if r.is_file():
+            return r
+    return None
+
+
+def normalize_script_paths(out: dict, run_dir: Path) -> None:
+    """输出里的脚本路径统一成相对数据目录的 runs/<任务>/scripts/<内容>/<平台>.md（就地修改）。
+    Agent 写的可能是绝对路径、相对运行目录或相对数据目录；下游（复核、改稿、内容库、保留期归档）都按这一种认。"""
+    root = paths.ops_data().resolve()
+
+    def norm(p):
+        if not isinstance(p, str) or not p:
+            return p
+        q = Path(p).expanduser()
+        for c in ([q] if q.is_absolute() else [run_dir / q, root / q]):
+            try:
+                r = c.resolve()
+                rel = r.relative_to(root)
+            except (OSError, ValueError):
+                continue
+            if r.is_file():
+                return str(rel)
+        return p
+
+    for s in out.get("scripts") or []:
+        if isinstance(s, dict) and s.get("path"):
+            s["path"] = norm(s["path"])
+    for ev in out.get("follow_up_events") or []:
+        d = ev.get("data") if isinstance(ev, dict) else None
+        if isinstance(d, dict) and isinstance(d.get("script_paths"), list):
+            d["script_paths"] = [norm(x) for x in d["script_paths"]]
+
+
+INLINE_RE = re.compile(r"<!--\s*opsd:inline\s+(\S+?)\s*-->")
+
+
+def load_skill_text(skill_dir: Path) -> str:
+    """读 SKILL.md，并把 `<!-- opsd:inline 相对路径 -->` 换成那个文件的内容（例如写稿和复核共用的内容合规清单）。
+    只允许引用同一个 skills 目录里的文件。"""
+    text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    root = skill_dir.resolve().parent
+
+    def sub(m):
+        p = (skill_dir / m.group(1)).resolve()
+        try:
+            p.relative_to(root)
+            return p.read_text(encoding="utf-8").strip()
+        except (ValueError, OSError):
+            return f"（附带文件 {m.group(1)} 读不到）"
+
+    return INLINE_RE.sub(sub, text)
