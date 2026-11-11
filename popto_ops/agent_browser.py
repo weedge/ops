@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
-from . import paths
+from . import paths, redact
 from .timeutil import iso
 
 SESSION = "ops-agent"
@@ -34,6 +36,8 @@ BLOCKED = {"upload", "drop", "run-code", "delete-data", "attach", "detach", "clo
            "pause-at", "resume", "step-over"}
 # open 的这些选项由包装层决定，Agent 传了也丢掉
 OPEN_FIXED = ("--browser", "--profile", "--persistent", "--config", "--headed", "--device", "--mobile")
+# eval 里出现这些就拦：读登录态
+STORAGE_RE = re.compile(r"(?i)\bcookie(?:store)?\b|\b(?:local|session)storage\b|\bindexeddb\b")
 
 # 需要登录才能搜索 / 提问的站点（opsctl browse login 默认逐个打开）
 LOGIN_SITES = {
@@ -79,9 +83,11 @@ def wrapper_path() -> str:
     return str(p) if p.exists() else f"{sys.executable} -m popto_ops.agent_browser"
 
 
-def blocked_reason(command: str) -> str | None:
+def blocked_reason(command: str, args: list[str] | None = None) -> str | None:
     if command in BLOCKED or command.startswith(BLOCKED_PREFIXES):
         return f"ops-browser 不提供 `{command}`：登录态读写、上传、改请求、跑任意代码这类命令在自动化里不开放。"
+    if command == "eval" and args and STORAGE_RE.search(" ".join(args)):
+        return "ops-browser 的 eval 不能读 Cookie / 本地存储（document.cookie、localStorage、sessionStorage、indexedDB）。"
     return None
 
 
@@ -91,7 +97,7 @@ def build_argv(args: list[str], s: dict, preopened: bool = False) -> list[str]:
     command = next((a for a in args if not a.startswith("-")), None)
     if command is None:
         return [*s["cli"], *args]
-    reason = blocked_reason(command)
+    reason = blocked_reason(command, args[args.index(command) + 1:])
     if reason:
         raise ValueError(reason)
     out = [*s["cli"], f"-s={s['session']}"]
@@ -224,11 +230,22 @@ def main(argv: list[str] | None = None) -> int:
         print(str(e), file=sys.stderr)
         return 2
     s["profile"].mkdir(parents=True, exist_ok=True)
+    cwd = run_dir_cwd()
+    started = time.time() - 2
     try:
-        return subprocess.run(cmd, env=child_env(), cwd=run_dir_cwd(), check=False).returncode
+        r = subprocess.run(cmd, env=child_env(), cwd=cwd, check=False, capture_output=True)
     except FileNotFoundError:
         print(f"ops-browser：找不到 {cmd[0]}（运行 opsctl doctor 看“专用浏览器”一行）。", file=sys.stderr)
         return 127
+    # 页面会把带 Cookie 的请求头打到控制台：Agent 读到的输出和 .playwright-cli/ 里的快照、日志都先打码。
+    # 不查钥匙串（secrets=()）：Agent 沙箱里访问钥匙串可能卡住，本系统的密钥也不会出现在网页里。
+    if cwd:
+        redact.scrub_tree(Path(cwd) / ".playwright-cli", since=started, mark=False, secrets=())
+    for data, stream in ((r.stdout, sys.stdout), (r.stderr, sys.stderr)):
+        if data:
+            stream.write(redact.redact(data.decode("utf-8", "replace"), secrets=())[0])
+            stream.flush()
+    return r.returncode
 
 
 if __name__ == "__main__":

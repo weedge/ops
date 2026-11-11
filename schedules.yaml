@@ -12,4 +12,5 @@
 - { type: cron.geo_check,          at: "WED 10:00" }
 - { type: cron.topic_planning,     at: "FRI 15:00" }
 - { type: cron.weekly_cleanup,     at: "SUN 10:00" }
+- { type: cron.data_retention,     at: "04:30" }   # 数据保留期清理 + 补打码（机器睡着就醒来后补跑）
 - { type: cron.ci_poll,            every: "30m", requires: ci.projects }  # 兜底：开发任务推送后 opsd 会直接触发审查；人手推的修改最多晚 30 分钟被发现

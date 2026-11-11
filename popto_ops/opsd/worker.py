@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 from .. import agent_browser
 from .. import config as cfgmod
-from .. import paths
+from .. import paths, redact
 from ..timeutil import iso, now, parse_duration
 from ..validate import build_schema, validate
 from . import breaker, video_prep
@@ -165,6 +165,11 @@ class Worker:
             result, out_path = self._run_agent(lease, agent, acfg, run_dir, alive=lambda: not lost.is_set())
         finally:
             done.set()
+            self._scrub_run_dir(run_dir)
+        # 回传中台（进 hub.db、日报、钉钉）之前再打一遍码：Cookie / token / 手机号不出本机
+        if result.output is not None:
+            result.output, _ = redact.redact_obj(result.output)
+        result.error_text, _ = redact.redact(result.error_text)
         body = {"run_id": run_id, "worker": self.name, "agent": agent, "is_fallback": lease.get("is_fallback"),
                 "started_at": started, "duration_s": round(time.monotonic() - t0, 1),
                 "session_id": result.session_id, "cost_usd": result.cost_usd,
@@ -186,6 +191,17 @@ class Worker:
         resp = self.client.result(tid, body)
         log.info("任务 %s [%s] %s → %s %s", tid, rule.get("name"), agent, body["status"], body.get("error_kind") or "")
         return resp
+
+    @staticmethod
+    def _scrub_run_dir(run_dir: Path) -> None:
+        """任务跑完（成功、失败、超时都算）把运行目录里的 Cookie / token / 手机号打码：
+        Agent 的输出流、浏览器的页面快照和控制台日志都可能带进来。"""
+        try:
+            st = redact.scrub_tree(run_dir)
+            if st["hits"]:
+                log.warning("运行目录 %s 有 %d 个文件含 Cookie / token / 手机号，已打码 %d 处", run_dir.name, st["files"], st["hits"])
+        except Exception:  # noqa: BLE001
+            log.exception("运行目录打码失败：%s", run_dir)
 
     def _uses_browser(self, rule: dict, acfg: dict) -> bool:
         return (rule.get("tools") == "browser" and acfg.get("type") not in ("script", "inbox") and rule.get("to") != "script"
@@ -353,6 +369,10 @@ class Worker:
             res.extra["invalid"] = True
             res.error_text = "输出不符合 Schema：" + "；".join(errs)
             return res, None
+        # 写 output.json、入库（ingest）之前先打码
+        res.output, hits = redact.redact_obj(res.output)
+        if hits:
+            log.warning("任务输出里有 %d 处 Cookie / token / 手机号，已打码（%s）", hits, run_dir.name)
         p = run_dir / "output.json"
         p.write_text(json.dumps(res.output, ensure_ascii=False, indent=1), encoding="utf-8")
         return res, p

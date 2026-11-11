@@ -112,6 +112,14 @@ budgets:                      # 单日上限
   tikhub_requests: 2000
   redfox_requests: 500
 
+# 数据保留期（08 §6 / §7），每天 04:30 由「数据保留清理」执行；试运行：python -m popto_ops.retention run --dry-run
+retention:
+  runs_days: 90               # 运行目录、发布截图、WorkBuddy 收发件箱；内容库还引用的脚本 / 发布包 / PRD 先挪到 content/_archived_runs/
+  text_days: 170              # hub.db 任务 / 事件 / 卡片 / 通知的正文、需求信号原话（可能带评论原文）；元数据永久保留
+                              # 两个天数上限都是 170：周报会引用上一周的评论，留出余量，保证评论原文所有副本 180 天内删掉
+  log_max_mb: 20              # 日志超过就轮转
+  log_keep: 2
+
 quiet_hours: "22:30-08:00"
 max_cards_per_day: 10
 max_tell_always_rules: 4

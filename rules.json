@@ -1054,6 +1054,28 @@
     "tell": "digest"
   },
   {
+    "name": "数据保留清理",
+    "when": {
+      "source": "cron",
+      "types": [
+        "cron.data_retention"
+      ]
+    },
+    "to": "script",
+    "capability": "script",
+    "priority": 3,
+    "command": [
+      "{python}",
+      "-m",
+      "popto_ops.retention",
+      "run"
+    ],
+    "group": "retention",
+    "parallel": 1,
+    "timeout": "15m",
+    "tell": "digest"
+  },
+  {
     "name": "其余流水线事件只留底",
     "when": {
       "source": "*",

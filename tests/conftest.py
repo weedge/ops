@@ -18,6 +18,14 @@ from popto_ops.notifier import FileNotifier  # noqa: E402
 COPY = ["agents.yaml", "rules.json", "schedules.yaml", "decisions.md", "not-doing.md", "skills", "listening", "dashboards"]
 
 
+@pytest.fixture(autouse=True)
+def _no_keychain_in_redact(monkeypatch):
+    """打码默认会读钥匙串里的真密钥（popto_ops.redact）；测试里一律不碰钥匙串。"""
+    from popto_ops import redact
+
+    monkeypatch.setattr(redact, "_known_secrets", lambda: ())
+
+
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     h = tmp_path / "ops"
