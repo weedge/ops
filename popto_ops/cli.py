@@ -20,7 +20,7 @@
   opsctl metrics import <csv>         导入创作者后台导出的数据
   opsctl digest [--hours 24]          中台留底摘要
   opsctl browse login [站点…]        Agent 专用浏览器人工登录；check 检查；sites 站点清单
-opsctl dashboard [--no-open]        生成并打开静态看板
+  opsctl dashboard [--no-open] [--days 7]  生成并打开静态看板（总览 / 内容 / 数据回收 / 需求与开发 / 获客 / 系统）
   opsctl launchd install [--load]     生成 launchd plist（默认只生成，不加载）
   opsctl skills link                  把 ops-* Skill 软链接到 ~/.claude/skills 等位置
 """
@@ -293,7 +293,7 @@ def cmd_browse(a) -> None:
 def cmd_dashboard(a) -> None:
     from .dashboard import build
 
-    p = build()
+    p = build(a.days)
     print(p)
     if not a.no_open:
         subprocess.run(["open", str(p)], check=False)
@@ -435,6 +435,7 @@ def main(argv: list[str] | None = None) -> None:
     s.set_defaults(fn=cmd_digest)
     s = sp.add_parser("dashboard")
     s.add_argument("--no-open", action="store_true")
+    s.add_argument("--days", type=int, default=7, help="统计窗口天数（含今天），默认 7")
     s.set_defaults(fn=cmd_dashboard)
     s = sp.add_parser("launchd")
     s.add_argument("action", choices=["install"])

@@ -28,7 +28,7 @@
 | `popto_ops/executors/` | 发布、评论回复、运营清理、线索卡片与跟进登记执行器（只执行已批准、24 小时内、按 action_id 幂等） |
 | `popto_ops/ci/` | CI 中台：发现 Agent MR、审查结论写回、合并闸门、线上核实 |
 | `popto_ops/ingest.py` | Agent 结构化产出 → `ops.db`（Agent 自己不写业务库） |
-| `dashboards/index.html` | 静态看板模板（`opsctl dashboard` 生成） |
+| `dashboards/index.html` | 静态看板模板（`opsctl dashboard [--days 7]` 生成）：总览（待你处理、指标、预算、定时表）、内容、数据回收、需求与开发、获客、系统六页；取数在 `popto_ops/dashboard.py` |
 | `launchd/template.plist` | 三个常驻进程的 plist 模板 |
 | `docs/整体流程.md` | 整体流程：结构、任务生命周期、四条流水线、一天的节奏 |
 | `tests/` | 53 个测试，含真实 HTTP 中台 + opsd + 假 Agent 的端到端测试 |

@@ -3,66 +3,695 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Popto 运营流水线</title>
+<title>Popto 产品运营研发流水线</title>
 <style>
-  :root { --bg:#f7f7f5; --card:#fff; --fg:#1d1d1f; --muted:#6b6b70; --line:#e4e4e7; --ok:#1f8a4c; --bad:#c2410c; --acc:#2563eb; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#111214; --card:#1a1b1e; --fg:#ececee; --muted:#9a9aa2; --line:#2a2b30; --ok:#4ade80; --bad:#fb923c; --acc:#60a5fa; } }
+  :root {
+    color-scheme: light;
+    --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+    --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10); --wash:rgba(11,11,11,.04);
+    --s1:#2a78d6; --track:#cde2fb; --neutral:#b5b4ac;
+    --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#d03b3b;
+    --tip-bg:#0b0b0b; --tip-fg:#f0efec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page:#0d0d0d; --surface:#1a1a19; --ink:#f0efec; --ink2:#c3c2b7; --muted:#898781;
+      --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10); --wash:rgba(255,255,255,.05);
+      --s1:#3987e5; --track:#0d366b; --neutral:#5b5a55;
+      --tip-bg:#f0efec; --tip-fg:#0b0b0b;
+    }
+  }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system, "PingFang SC", sans-serif; }
-  main { max-width:1180px; margin:0 auto; padding:24px 16px 64px; }
-  h1 { font-size:20px; margin:0 0 4px; } .sub { color:var(--muted); margin-bottom:20px; }
-  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-bottom:20px; }
-  .kpi, section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
-  .kpi b { display:block; font-size:24px; font-variant-numeric:tabular-nums; } .kpi span { color:var(--muted); font-size:12px; }
-  section { margin-bottom:16px; overflow-x:auto; } h2 { font-size:15px; margin:0 0 10px; }
-  table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
-  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
-  th { color:var(--muted); font-weight:500; font-size:12px; } td.wrap { white-space:normal; }
-  .bar { height:8px; background:var(--acc); border-radius:4px; display:inline-block; vertical-align:middle; }
-  .ok { color:var(--ok); } .bad { color:var(--bad); } .empty { color:var(--muted); }
+  body { margin:0; background:var(--page); color:var(--ink); font:14px/1.55 system-ui, -apple-system, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width:1320px; margin:0 auto; padding:20px 16px 72px; }
+  a { color:inherit; text-decoration:underline; text-decoration-color:var(--axis); text-underline-offset:3px; }
+  a:hover { text-decoration-color:currentColor; }
+  code { font:12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background:var(--wash); border:1px solid var(--border); border-radius:6px; padding:2px 6px; white-space:nowrap; }
+
+  header.top { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 16px; }
+  h1 { font-size:20px; margin:0; }
+  .sub { color:var(--ink2); font-size:13px; }
+  .stale { margin-top:10px; padding:8px 12px; border:1px solid var(--border); border-left:3px solid var(--warn); border-radius:8px; background:var(--surface); }
+
+  /* 状态条 */
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 4px; }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border:1px solid var(--border); border-radius:999px; background:var(--surface); font-size:13px; }
+  .chip small { color:var(--ink2); font-size:12px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--neutral); flex:none; }
+  .good > .dot, .dot.good { background:var(--good); } .warn > .dot, .dot.warn { background:var(--warn); }
+  .crit > .dot, .dot.crit { background:var(--crit); } .info > .dot, .dot.info { background:var(--s1); }
+  .serious > .dot, .dot.serious { background:var(--serious); }
+
+  /* 页签 */
+  nav.tabs { position:sticky; top:0; z-index:5; display:flex; gap:4px; overflow-x:auto; margin:12px -16px 16px; padding:8px 16px; background:var(--page); border-bottom:1px solid var(--grid); }
+  nav.tabs button { font:inherit; color:var(--ink2); background:none; border:0; border-radius:8px; padding:6px 12px; cursor:pointer; white-space:nowrap; }
+  nav.tabs button:hover { background:var(--wash); }
+  nav.tabs button[aria-selected="true"] { color:var(--ink); font-weight:600; background:var(--surface); box-shadow:inset 0 0 0 1px var(--border); }
+  nav.tabs button .n { margin-left:6px; font-size:12px; font-weight:600; padding:0 6px; border-radius:999px; background:var(--crit); color:#fff; }
+  section.tab { display:none; } section.tab.on { display:block; }
+
+  /* 布局 */
+  .grid { display:grid; gap:16px; margin-bottom:16px; }
+  .g2 { grid-template-columns:repeat(auto-fit, minmax(min(100%, 440px), 1fr)); }
+  .g3 { grid-template-columns:repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+  .g5 { grid-template-columns:repeat(auto-fit, minmax(min(100%, 220px), 1fr)); }
+  .g6 { grid-template-columns:repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; min-width:0; }
+  .card.block { margin-bottom:16px; }
+  .card > h2 { font-size:15px; margin:0 0 2px; }
+  .card > .hint { color:var(--ink2); font-size:12px; margin:0 0 12px; }
+  .card > h2 + :not(.hint) { margin-top:12px; }
+  .empty { color:var(--muted); padding:8px 0; }
+  .scroll { overflow-x:auto; }
+  h3 { font-size:13px; font-weight:600; margin:16px 0 8px; color:var(--ink2); }
+  h3:first-child { margin-top:0; }
+
+  /* 指标格 */
+  .tile { display:flex; flex-direction:column; }
+  .tile .label { color:var(--ink2); font-size:13px; }
+  .tile .value { font-size:28px; font-weight:600; line-height:1.25; margin:2px 0; }
+  .tile .value small { font-size:14px; font-weight:500; color:var(--ink2); margin-left:2px; }
+  .tile .foot { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; font-size:12px; color:var(--ink2); }
+  .tile svg { display:block; margin-top:auto; padding-top:8px; box-sizing:content-box; }
+  .mini { display:flex; flex-wrap:wrap; gap:6px 20px; margin:10px 0 0; }
+  .mini div { font-size:12px; color:var(--ink2); } .mini b { display:block; font-size:18px; font-weight:600; color:var(--ink); }
+  button.link { font:inherit; color:var(--ink2); background:none; border:0; padding:0; cursor:pointer; text-decoration:underline; text-decoration-color:var(--axis); text-underline-offset:3px; font-size:12px; }
+
+  /* 徽标：圆点带颜色，文字用正文色 */
+  .badge { display:inline-flex; align-items:center; gap:5px; font-size:12px; white-space:nowrap; }
+  .tag { display:inline-block; font-size:12px; padding:0 6px; border:1px solid var(--border); border-radius:6px; color:var(--ink2); white-space:nowrap; }
+
+  /* 待你处理 */
+  .todo { list-style:none; margin:0; padding:0; }
+  .todo li { display:grid; grid-template-columns:auto 1fr; gap:4px 12px; padding:12px 0; border-top:1px solid var(--grid); }
+  .todo li:first-child { border-top:0; padding-top:4px; }
+  .todo .what { font-weight:600; } .todo .more { color:var(--ink2); font-size:13px; grid-column:2; }
+  .todo .acts { grid-column:2; display:flex; flex-wrap:wrap; gap:6px 8px; align-items:center; font-size:12px; color:var(--ink2); }
+  button.copy { font:12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color:var(--ink); background:var(--wash); border:1px solid var(--border); border-radius:6px; padding:2px 8px; cursor:pointer; }
+  button.copy:hover { border-color:var(--axis); } button.copy.ok { border-color:var(--good); }
+
+  /* 表格 */
+  table { border-collapse:collapse; width:100%; }
+  th, td { text-align:left; padding:7px 10px 7px 0; border-bottom:1px solid var(--grid); vertical-align:top; white-space:nowrap; }
+  tr:last-child td { border-bottom:0; }
+  th { color:var(--ink2); font-weight:500; font-size:12px; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  td.wrap { white-space:normal; min-width:220px; } td.wide { white-space:normal; min-width:300px; }
+  td .s { display:block; color:var(--ink2); font-size:12px; white-space:normal; }
+  .clamp { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+  tr.off td { color:var(--muted); }
+
+  /* 细分段条：一个整体拆成几种状态 */
+  .seg { display:flex; gap:2px; height:8px; min-width:90px; width:120px; }
+  .seg i { display:block; border-radius:4px; min-width:3px; }
+  .seg.wide { width:100%; }
+  .st-done { background:var(--good); } .st-waiting_decision { background:var(--warn); } .st-failed { background:var(--crit); }
+  .st-queued, .st-leased { background:var(--s1); } .st-cancelled { background:var(--neutral); }
+  .legend { display:flex; flex-wrap:wrap; gap:4px 14px; font-size:12px; color:var(--ink2); margin:0 0 10px; }
+  .legend span { display:inline-flex; align-items:center; gap:5px; }
+  .legend i { width:10px; height:10px; border-radius:3px; display:inline-block; }
+
+  /* 横条：比大小 */
+  .hb { display:grid; grid-template-columns:minmax(64px, max-content) 1fr; gap:7px 10px; align-items:center; }
+  .hb .l { color:var(--ink2); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; }
+  .hb .t { display:flex; align-items:center; gap:8px; min-width:0; }
+  .hb .t i { display:block; height:12px; background:var(--s1); border-radius:0 4px 4px 0; min-width:2px; }
+  .hb .t b { font-weight:500; font-variant-numeric:tabular-nums; white-space:nowrap; } .hb .t small { color:var(--ink2); white-space:nowrap; }
+
+  /* 用量条 */
+  .meter { margin-bottom:12px; } .meter:last-child { margin-bottom:0; }
+  .meter .row { display:flex; justify-content:space-between; gap:8px; font-size:13px; }
+  .meter .row span:last-child { color:var(--ink2); font-variant-numeric:tabular-nums; }
+  .meter .bar { position:relative; height:8px; border-radius:4px; background:var(--track); margin-top:4px; }
+  .meter .bar i { display:block; height:100%; border-radius:4px; background:var(--s1); }
+  .meter.warn .bar i { background:var(--warn); } .meter.crit .bar i { background:var(--crit); }
+  .meter .bar u { position:absolute; top:-2px; width:2px; height:12px; background:var(--ink2); }
+
+  /* 内容日历 */
+  .cal { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(100%, 210px), 1fr)); gap:10px; }
+  .day { border:1px solid var(--grid); border-radius:10px; padding:10px; min-width:0; }
+  .day.today { border-color:var(--s1); }
+  .day h4 { margin:0 0 8px; font-size:13px; } .day h4 small { color:var(--ink2); font-weight:400; margin-left:6px; }
+  .item { padding:7px 0; border-top:1px solid var(--grid); font-size:13px; } .item:first-of-type { border-top:0; padding-top:0; }
+  .item.child { padding-left:12px; }
+  .item .m { display:flex; flex-wrap:wrap; gap:4px 8px; align-items:center; margin-top:3px; color:var(--ink2); font-size:12px; }
+
+  /* 列表 */
+  .list { list-style:none; margin:0; padding:0; }
+  .list li { padding:10px 0; border-top:1px solid var(--grid); } .list li:first-child { border-top:0; padding-top:0; }
+  .list .hd { display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; } .list .hd b { font-weight:600; }
+  .list .hd small { color:var(--ink2); } .list p { margin:3px 0 0; color:var(--ink2); font-size:13px; }
+  details > summary { cursor:pointer; color:var(--ink2); font-size:13px; margin-top:8px; }
+  .chk { display:inline-flex; gap:4px; } .chk span { font-size:11px; padding:0 5px; border-radius:5px; border:1px solid var(--border); color:var(--ink2); }
+  .chk .done { border-color:var(--good); color:var(--ink); } .chk .overdue { border-color:var(--crit); color:var(--ink); } .chk .skipped { color:var(--muted); text-decoration:line-through; }
+
+  /* 图 */
+  svg text { fill:var(--ink2); font-size:11px; font-family:inherit; } svg text.cap { fill:var(--ink); font-weight:500; }
+  svg .gl { stroke:var(--grid); stroke-width:1; } svg .ax { stroke:var(--axis); stroke-width:1; }
+  svg .col:hover rect.bar, svg .col:focus rect.bar { opacity:.82; } svg .col { outline:none; }
+  #tip { position:fixed; z-index:20; pointer-events:none; display:none; max-width:320px; padding:6px 9px; border-radius:8px; background:var(--tip-bg); color:var(--tip-fg); font-size:12px; line-height:1.5; white-space:pre-line; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Popto 运营流水线</h1>
-  <div class="sub" id="sub"></div>
-  <div class="kpis" id="kpis"></div>
-  <section><h2>各规则任务（近 7 天）</h2><div id="tasks"></div></section>
-  <section><h2>Agent 运行</h2><div id="runs"></div></section>
-  <section><h2>卡片</h2><div id="cards"></div></section>
-  <section><h2>事件量</h2><div id="events"></div></section>
-  <section><h2>失败任务</h2><div id="failures"></div></section>
-  <section><h2>自有内容最新数据</h2><div id="posts"></div></section>
-  <section><h2>渠道漏斗</h2><div id="funnel"></div></section>
+  <header class="top"><h1>Popto 产品运营研发流水线</h1><span class="sub" id="sub"></span></header>
+  <div id="stale"></div>
+  <div class="chips" id="chips"></div>
+  <nav class="tabs" id="tabs" role="tablist"></nav>
+  <section class="tab" id="t-overview"></section>
+  <section class="tab" id="t-content"></section>
+  <section class="tab" id="t-data"></section>
+  <section class="tab" id="t-dev"></section>
+  <section class="tab" id="t-growth"></section>
+  <section class="tab" id="t-system"></section>
 </main>
+<div id="tip" role="tooltip"></div>
 <script>
 const D = /*__DATA__*/null;
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-function table(el, rows, cols) {
-  const box = document.getElementById(el);
-  if (!rows || !rows.length) { box.innerHTML = '<div class="empty">暂无数据</div>'; return; }
-  box.innerHTML = "<table><tr>" + cols.map(c => `<th>${c[1]}</th>`).join("") + "</tr>" +
-    rows.map(r => "<tr>" + cols.map(c => `<td class="${c[2]||''}">${c[3] ? c[3](r) : esc(r[c[0]])}</td>`).join("") + "</tr>").join("") + "</table>";
+
+/* ---------- 基础：所有数据都用 textContent 写进页面（评论、线索、帖子标题都是外部内容） ---------- */
+function h(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") e.className = v;
+    else if (k === "text") e.textContent = v;
+    else if (k === "tip") { e.dataset.tip = v; e.tabIndex = 0; }
+    else if (k === "style") e.style.cssText = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  return put(e, kids);
 }
-if (!D) { document.getElementById("sub").textContent = "没有数据：请用 opsctl dashboard 生成。"; }
-else {
-  document.getElementById("sub").textContent = `生成于 ${D.generated_at} · ${D.window}`;
-  const k = D.kpi, pct = v => v == null ? "—" : (v * 100).toFixed(0) + "%";
-  document.getElementById("kpis").innerHTML = [
-    ["事件自动闭环率", pct(k.auto_close_rate), "目标 ≥ 80%"],
-    ["每天卡片数", k.cards_per_day, "目标 ≤ 10"],
-    ["卡片平均处理", k.avg_decision_sec == null ? "—" : k.avg_decision_sec + " 秒", "目标 ≤ 30 秒"],
-    ["Agent 运行成功率", pct(k.run_success_rate), "目标 ≥ 90%"],
-    ["降级次数", k.fallback_runs, "只做观察"],
-  ].map(x => `<div class="kpi"><span>${x[0]}</span><b>${x[1]}</b><span>${x[2]}</span></div>`).join("");
-  const max = Math.max(1, ...D.tasks.map(t => t.n));
-  table("tasks", D.tasks, [["rule","规则"],["state","状态"],["n","数量","",r => `<span class="bar" style="width:${Math.round(r.n/max*120)}px"></span> ${r.n}`]]);
-  table("runs", D.runs, [["agent","Agent"],["status","结果","",r => `<span class="${r.status==='ok'?'ok':'bad'}">${esc(r.status)}</span>`],["is_fallback","降级","",r => r.is_fallback ? "是" : ""],["n","次数"],["avg_s","平均秒"],["cost","费用 $"]]);
-  table("cards", D.cards, [["seq","编号","",r => "C" + r.seq],["title","标题","wrap"],["status","状态"],["choice","选择"],["decided_by","批准人"]]);
-  table("events", D.events, [["type","类型"],["n","数量"]]);
-  table("failures", D.failures, [["id","任务"],["rule","规则"],["agent","Agent"],["error","原因","wrap"],["updated_at","时间"]]);
-  table("posts", D.posts, [["platform","平台"],["title","标题","wrap"],["checkpoint","节点"],["views","播放"],["likes","赞"],["comments","评"],["shares","转"],["favorites","藏"]]);
-  table("funnel", D.funnel, [["date","日期"],["clicks","点击"],["reg","注册"],["first_done","首条完成"],["paid","付费"]]);
+function put(el, ...kids) {
+  for (const kid of kids.flat(4)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  return el;
+}
+const svgNS = "http://www.w3.org/2000/svg";
+function s(tag, attrs, ...kids) {
+  const e = document.createElementNS(svgNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) { if (k === "text") e.textContent = v; else e.setAttribute(k, v); }
+  e.append(...kids.filter(Boolean));
+  return e;
+}
+const $ = id => document.getElementById(id);
+const sum = a => a.reduce((x, y) => x + (y || 0), 0);
+
+/* ---------- 文字格式 ---------- */
+const GEN = D ? new Date(D.generated_at) : new Date();
+const p2 = n => String(n).padStart(2, "0");
+const WD = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+const dayKey = d => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+function num(v, digits) {
+  if (v == null || v === "") return "—";
+  const n = Number(v);
+  if (!isFinite(n)) return String(v);
+  if (Math.abs(n) >= 1e4) return (n / 1e4).toFixed(n >= 1e5 ? 0 : 1) + " 万";
+  return digits != null ? n.toFixed(digits) : n.toLocaleString("zh-CN", { maximumFractionDigits: 1 });
+}
+const pct = (v, d = 0) => v == null ? "—" : (v * 100).toFixed(d) + "%";
+function dur(sec) {
+  if (sec == null) return "—";
+  if (sec < 90) return Math.round(sec) + " 秒";
+  if (sec < 5400) return (sec / 60).toFixed(sec < 600 ? 1 : 0) + " 分钟";
+  return (sec / 3600).toFixed(1) + " 小时";
+}
+/* 时间都相对“生成时刻”算：这是静态快照，不能拿打开页面的时间来算“几分钟前” */
+function when(iso) {
+  if (!iso) return "—";
+  const t = new Date(String(iso).replace(/^skipped:/, "").replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+  if (isNaN(t)) return String(iso);
+  const diff = (t - GEN) / 60000, a = Math.abs(diff), hm = `${p2(t.getHours())}:${p2(t.getMinutes())}`;
+  const days = Math.round((new Date(dayKey(t)) - new Date(dayKey(GEN))) / 864e5);
+  if (a < 1) return "刚刚";
+  if (a < 60) return Math.round(a) + (diff < 0 ? " 分钟前" : " 分钟后");
+  if (days === 0) return "今天 " + hm;
+  if (days === -1) return "昨天 " + hm;
+  if (days === 1) return "明天 " + hm;
+  if (days > 1 && days < 7) return `${WD[t.getDay()]} ${hm}`;
+  return `${p2(t.getMonth() + 1)}-${p2(t.getDate())} ${hm}`;
+}
+const left = iso => { const m = (new Date(iso) - GEN) / 60000; return m <= 0 ? "已到期" : m < 60 ? `还剩 ${Math.round(m)} 分钟` : `还剩 ${Math.round(m / 60)} 小时`; };
+const safeUrl = u => /^https?:\/\//i.test(u || "") ? u : null;
+const link = (text, url) => safeUrl(url) ? h("a", { href: url, target: "_blank", rel: "noopener noreferrer", text }) : text;
+
+/* ---------- 名称对照 ---------- */
+const L = {
+  state: { done: "完成", failed: "失败", cancelled: "已取消", queued: "排队中", leased: "运行中", waiting_decision: "等人批" },
+  stateTone: { done: "good", failed: "crit", cancelled: "", queued: "info", leased: "info", waiting_decision: "warn" },
+  platform: { douyin: "抖音", wechat_channels: "视频号", xiaohongshu: "小红书", bilibili: "B 站", kuaishou: "快手", zhihu: "知乎", wechat_mp: "公众号" },
+  content: { proposed: "待批选题", approved: "选题已批", scripted: "脚本完成", media_ready: "素材完成", expired: "已过期" },
+  pack: { ready: "待发卡片", carded: "卡片已发", approved: "已批准", published: "已发布", rejected: "不发", failed: "发布失败" },
+  packTone: { ready: "info", carded: "warn", approved: "info", published: "good", rejected: "", failed: "crit" },
+  action: { awaiting_manual: "等人手动发", done: "已执行", running: "执行中", failed: "执行失败" },
+  mode: { off: "人工发布", dry_run: "试运行（不真发）", live: "自动发布", semi_auto: "半自动", manual: "人工", auto: "自动" },
+  demand: { open: "待评估", approved: "已批准", prd_review: "PRD 待批", in_dev: "开发中", done: "已上线", ops_backlog: "运营系统待办", rejected: "不做" },
+  demandTone: { open: "info", approved: "info", prd_review: "warn", in_dev: "info", done: "good", ops_backlog: "", rejected: "" },
+  lead: { creator: "创作者", team_lead: "团队长", mcn: "MCN", other: "其他" },
+  term: { pain: "痛点词", solution: "方案词", brand: "品牌词", competitor: "竞品词" },
+  tell: { never: "不通知", needed: "要拍板时发卡片", always: "每次都发", digest: "进日报" },
+  routed: { task: "生成任务", none: "只留底", internal: "中台内部处理", unmatched: "没有规则接", paused: "已暂停", "": "—" },
+  sched: { fired: "已触发", pending: "到点未触发", missed: "已错过", off: "未启用" },
+  schedTone: { fired: "good", pending: "warn", missed: "", off: "" },
+  err: { network: "网络", invalid_output: "输出不合格", timeout: "超时", quota: "额度", auth: "认证", error: "报错", stale: "租约过期" },
+  cardKind: { demand_top: "需求 Top 10", release: "合并", topic_calendar: "内容日历", publish_batch: "发布", lead_batch: "线索", reply_batch: "评论回复", prd: "PRD", cleanup: "清理" },
+  cardStatus: { pending: "待发出", sent: "待批", decided: "已批", expired: "已过期" },
+  cardTone: { pending: "info", sent: "warn", decided: "good", expired: "" },
+  agentState: { closed: "正常", open: "熔断中", half_open: "试探恢复" },
+  agentTone: { closed: "good", open: "crit", half_open: "warn" },
+  comment: { demand: "需求", question: "提问", praise: "夸奖", negative: "负面", spam: "垃圾", lead: "线索", pos: "正面", neu: "中性", neg: "负面", none: "未回复", drafted: "有草稿", approved: "已批准", sent: "已回复" },
+  kind: { question: "提问", quality: "质量", pricing: "定价", pain: "痛点", feature_request: "功能需求", bug: "缺陷", praise: "夸奖", competitor: "竞品" },
+  signal: { mining: "需求挖掘", listening: "社媒监听", comment: "评论", incident: "线上故障" },
+  outbox: { card: "卡片", card_batch: "待批清单", message: "消息", file: "文件", alert: "告警" },
+  job: { done: "已采", pending: "未到点", overdue: "到点未采", skipped: "登记时已过点" },
+};
+const name = (map, k) => (L[map] && L[map][k]) || (k == null || k === "" ? "—" : k);
+const badge = (text, tone) => h("span", { class: "badge " + (tone || "") }, h("i", { class: "dot" }), text);
+
+/* ---------- 组件 ---------- */
+function card(title, hint, ...body) {
+  return h("div", { class: "card" }, title && h("h2", { text: title }), hint && h("p", { class: "hint", text: hint }), body);
+}
+const empty = (text = "暂无数据") => h("div", { class: "empty", text });
+function table(rows, cols, opts = {}) {
+  if (!rows || !rows.length) return empty(opts.empty);
+  return h("div", { class: "scroll" }, h("table", null,
+    h("thead", null, h("tr", null, cols.map(c => h("th", { class: c.cls && c.cls.includes("num") ? "num" : null, text: c.t })))),
+    h("tbody", null, rows.map(r => h("tr", { class: opts.rowClass ? opts.rowClass(r) : null },
+      cols.map(c => h("td", { class: c.cls || null }, c.f ? c.f(r) : (r[c.k] ?? "—"))))))));
+}
+function hbars(items, opts = {}) {
+  if (!items || !items.length) return empty(opts.empty);
+  if (items.length === 1) return h("div", { class: "mini", style: "margin:0" }, h("div", null, h("b", { text: num(items[0].n) }), items[0].label + (items[0].note ? " · " + items[0].note : "")));
+  const max = Math.max(1, ...items.map(i => i.n || 0));
+  return h("div", { class: "hb" }, items.map(i => [
+    h("span", { class: "l", text: i.label, title: i.label }),
+    h("span", { class: "t", tip: `${i.label}：${num(i.n)}${i.note ? "\n" + i.note : ""}` },
+      h("i", { style: `width:calc((100% - ${opts.pad || 72}px) * ${(i.n || 0) / max})` }), h("b", { text: num(i.n) }), i.note && h("small", { text: i.note })),
+  ]));
+}
+const STATE_ORDER = ["done", "waiting_decision", "leased", "queued", "failed", "cancelled"];
+function seg(states, wide) {
+  const total = sum(Object.values(states || {}));
+  if (!total) return h("span", { class: "empty", text: "—" });
+  const parts = STATE_ORDER.filter(k => states[k]);
+  return h("div", { class: "seg" + (wide ? " wide" : ""), tip: parts.map(k => `${L.state[k]} ${states[k]}`).join("\n"), role: "img",
+    "aria-label": parts.map(k => `${L.state[k]} ${states[k]}`).join("，") },
+    parts.map(k => h("i", { class: "st-" + k, style: `flex:${states[k]} 1 0` })));
+}
+const stateLegend = () => h("div", { class: "legend" }, STATE_ORDER.filter(k => k !== "leased").map(k =>
+  h("span", null, h("i", { class: "st-" + k }), k === "queued" ? "排队 / 运行中" : L.state[k])));
+const stateText = states => STATE_ORDER.filter(k => states[k]).map(k => `${L.state[k]} ${states[k]}`).join(" · ") || "没有任务";
+function meter(b) {
+  const r = b.cap ? b.used / b.cap : 0, tone = r >= 1 ? "crit" : r >= 0.8 ? "warn" : "";
+  return h("div", { class: "meter " + tone },
+    h("div", { class: "row" }, h("span", { text: b.label }), h("span", { text: b.unit === "%" ? `${num(b.used)}%` : `${num(b.used)} / ${num(b.cap)}` })),
+    h("div", { class: "bar", tip: `${b.label}：${b.unit === "%" ? num(b.used) + "%" : `${b.unit}已用 ${num(b.used)}，上限 ${num(b.cap)}`}` },
+      h("i", { style: `width:${Math.min(100, r * 100)}%` }),
+      Object.values(b.marks || {}).map(m => h("u", { style: `left:${m * 100}%` }))));
+}
+function spark(vals) {
+  const pts = vals.map((v, i) => [i, v]).filter(p => p[1] != null);
+  if (pts.length < 2) return null;
+  const W = 140, H = 28, lo = Math.min(...pts.map(p => p[1])), hi = Math.max(...pts.map(p => p[1])), n = vals.length - 1 || 1;
+  const xy = p => [4 + p[0] / n * (W - 8), hi === lo ? H / 2 : H - 4 - (p[1] - lo) / (hi - lo) * (H - 8)];
+  const last = xy(pts[pts.length - 1]);
+  return s("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" },
+    s("polyline", { points: pts.map(p => xy(p).join(",")).join(" "), fill: "none", stroke: "var(--axis)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }),
+    s("circle", { cx: last[0], cy: last[1], r: 4, fill: "var(--s1)", stroke: "var(--surface)", "stroke-width": 2 }));
+}
+function tile(o) {
+  return h("div", { class: "card tile" }, h("div", { class: "label", text: o.label }),
+    h("div", { class: "value" }, o.value, o.unit && h("small", { text: o.unit })),
+    h("div", { class: "foot" }, o.ok != null && badge(o.ok ? "达标" : "未达标", o.ok ? "good" : "warn"), h("span", { text: o.foot })),
+    o.trend && spark(o.trend));
+}
+/* 每天的运行次数：成功在下、失败在上，柱顶写合计 */
+function columns(days, series) {
+  const totals = days.map((_, i) => sum(series.map(x => x.v[i])));
+  const W = Math.max(360, days.length * 72), H = 200, padL = 36, padB = 24, padT = 18, plotH = H - padB - padT;
+  const rawMax = Math.max(1, ...totals), step = Math.pow(10, Math.floor(Math.log10(rawMax))), nice = [1, 2, 5, 10].map(m => m * step).find(m => rawMax / m <= 4) || step * 10;
+  const top = Math.ceil(rawMax / nice) * nice, y = v => padT + plotH - v / top * plotH, band = (W - padL) / days.length, bw = Math.min(24, band * 0.5);
+  const g = s("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", style: `max-width:${W}px`, role: "img", "aria-label": "每天 Agent 运行次数" });
+  for (let v = 0; v <= top; v += nice) {
+    g.append(s("line", { class: v ? "gl" : "ax", x1: padL, x2: W, y1: y(v), y2: y(v) }), s("text", { x: padL - 6, y: y(v) + 4, "text-anchor": "end", text: num(v) }));
+  }
+  days.forEach((d, i) => {
+    const cx = padL + band * i + band / 2, col = s("g", { class: "col", tabindex: 0 });
+    col.dataset.tip = `${d}\n` + series.map(x => `${x.name} ${num(x.v[i])}`).join("\n");
+    col.append(s("rect", { x: padL + band * i, y: padT, width: band, height: plotH, fill: "transparent" }));
+    let base = 0;
+    const live = series.filter(x => x.v[i] > 0);
+    live.forEach((x, j) => {
+      const y1 = y(base + x.v[i]), hgt = Math.max(1, y(base) - y1 - (j < live.length - 1 ? 2 : 0)), isTop = j === live.length - 1, r = isTop ? Math.min(4, hgt) : 0;
+      const yy = y(base) - hgt, x0 = cx - bw / 2;
+      col.append(s("path", { class: "bar", fill: x.color, d: `M${x0},${yy + hgt}V${yy + r}q0,${-r} ${r},${-r}h${bw - 2 * r}q${r},0 ${r},${r}V${yy + hgt}z` }));
+      base += x.v[i];
+    });
+    if (totals[i]) col.append(s("text", { class: "cap", x: cx, y: y(totals[i]) - 5, "text-anchor": "middle", text: num(totals[i]) }));
+    col.append(s("text", { x: cx, y: H - 6, "text-anchor": "middle", text: d.slice(5) }));
+    g.append(col);
+  });
+  return h("div", null, h("div", { class: "legend" }, series.map(x => h("span", null, h("i", { style: `background:${x.color}` }), x.name))), h("div", { class: "scroll" }, g));
+}
+function copyBtn(text) {
+  return h("button", { class: "copy", title: "点一下复制", text, onclick: ev => {
+    const b = ev.currentTarget, done = () => { b.classList.add("ok"); setTimeout(() => b.classList.remove("ok"), 900); };
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(done, () => {
+      const ta = h("textarea", { style: "position:fixed;opacity:0" }); ta.value = text; document.body.append(ta); ta.select();
+      try { document.execCommand("copy"); done(); } catch (e) { /* 复制不了就算了，文字本身看得见 */ } ta.remove();
+    });
+  } });
+}
+function ruleTable(key) {
+  const rows = D.rules.filter(r => r.pipeline === key);
+  return card("这条线上的规则", `${D.window}内每条规则接了多少事件、跑了多少任务、结果如何。只留底的规则不产生任务。`, stateLegend(), table(rows, [
+    { t: "规则", cls: "wrap", f: r => [r.rule, r.enabled === false && h("span", { class: "tag", style: "margin-left:6px", text: "已停用" }),
+      h("span", { class: "s", text: [r.skill, r.credits_per_run && `每次 ${r.credits_per_run} 积分`].filter(Boolean).join(" · ") })] },
+    { t: "谁来做", f: r => r.to === "none" ? "只留底" : r.to || "—" },
+    { t: "通知", f: r => name("tell", r.tell) },
+    { t: "任务分布", f: r => seg(r.states) },
+    { t: "事件", cls: "num", f: r => r.events || "—" },
+    { t: "任务", cls: "num", f: r => r.n || "—" },
+    { t: "平均耗时", cls: "num", f: r => dur(r.avg_s) },
+    { t: "最近一次", f: r => r.last_at ? [when(r.last_at), h("span", { class: "s" }, badge(name("state", r.last_state), L.stateTone[r.last_state]))] : "—" },
+    { t: "最近结果", cls: "wide", f: r => r.last_summary ? h("span", { class: "clamp", title: r.last_summary, text: r.last_summary }) : "—" },
+  ], { rowClass: r => r.n || r.events ? null : "off" }));
+}
+const dist = (title, items, map, hint) => card(title, hint, hbars((items || []).map(i => ({ label: map ? name(map, i.label) : i.label, n: i.n }))));
+
+/* ---------- 顶部状态 ---------- */
+function renderTop() {
+  const H = D.health, ageMin = (Date.now() - GEN) / 60000;
+  $("sub").textContent = `${D.window}（${D.since.slice(0, 10)} 起） · 生成于 ${D.generated_at.slice(0, 16).replace("T", " ")}`;
+  if (ageMin > 30) put($("stale"), h("div", { class: "stale" }, `这是 ${dur(ageMin * 60)}前生成的快照。看最新数据请重新运行 `, h("code", { text: "opsctl dashboard" }), "。"));
+  const chip = (tone, label, detail, tip) => h("span", { class: "chip " + tone, tip }, h("i", { class: "dot" }), label, detail && h("small", { text: detail }));
+  const lis = H.listener || [], lisDown = lis.filter(x => !x.connected);
+  const q = H.queue || {};
+  put($("chips"), 
+    H.hub_online == null ? null : chip(H.hub_online ? "good" : "crit", "中台", H.hub_online ? "在线" : "连不上", H.hub_online ? null : "生成看板时访问不到中台的 /v1/health"),
+    chip(H.notifier === "console" ? "warn" : "good", "通知出口", H.notifier || "—", H.notifier === "console" ? "console 只打印不外发，正式运行要改成 dingtalk" : null),
+    lis.length ? chip(lisDown.length === lis.length ? "crit" : lisDown.length ? "warn" : "good", "钉钉监听",
+      lisDown.length ? `${lisDown.map(x => x.name).join("、")}断开` : "已连接", lis.map(x => `${x.name}：${x.connected ? "已连接" : "断开"}${x.error ? "\n" + x.error : ""}`).join("\n")) : null,
+    chip(H.in_quiet ? "warn" : "", "静默时段", `${H.quiet_hours || "未设置"}${H.in_quiet ? "（现在只发 P0）" : ""}`),
+    chip(q.queued || q.leased ? "info" : "", "队列", `排队 ${q.queued || 0} · 运行 ${q.leased || 0} · 等批 ${q.waiting_decision || 0}`),
+    H.outbox_pending ? chip("warn", "待发通知", String(H.outbox_pending)) : null,
+    (H.paused || []).map(p => chip("warn", "已暂停", p.key, p.reason || null)),
+    chip("", "规则", `${H.rules_enabled} 条启用 / 共 ${H.rules}`));
+}
+
+/* ---------- 总览 ---------- */
+function todoList() {
+  const T = D.todo, items = [], H = D.health;
+  for (const c of T.cards) {
+    items.push(h("li", null, badge("待批卡片", "warn"),
+      h("div", { class: "what", text: `C${c.seq} ${c.title}` }),
+      h("div", { class: "more", text: [c.proposal, c.items ? `共 ${c.items} 项` : null, c.expires_at ? `${left(c.expires_at)}，到期按「${(c.options.find(o => o.key === c.on_expire) || {}).label || c.on_expire || "安全选项"}」处理` : null].filter(Boolean).join(" · ") }),
+      h("div", { class: "acts" }, "在群里回复：", c.options.map(o => [copyBtn(`C${c.seq} ${o.n}`), `${o.label}${o.require_reason ? "（后面写原因）" : ""}`]))));
+  }
+  for (const m of T.manual_publish) {
+    items.push(h("li", null, badge("等你手动发", "info"),
+      h("div", { class: "what", text: `${name("platform", m.platform)} · ${m.title || m.pack_id}` }),
+      h("div", { class: "more", text: `${when(m.approved_at)}批准，计划 ${when(m.scheduled_at)} 发布。发完补登记，系统才会排数据采集。` }),
+      h("div", { class: "acts" }, "发完在群里回复：", copyBtn(`已发 ${m.pack_id}`), "后面可带作品链接")));
+  }
+  for (const f of T.failed_tasks) {
+    items.push(h("li", null, badge("任务失败", "crit"),
+      h("div", { class: "what", text: `${f.rule}${f.agent ? "（" + f.agent + "）" : ""}` }),
+      h("div", { class: "more", text: `${when(f.updated_at)} · ${f.error || "没有记录原因"}` }),
+      h("div", { class: "acts" }, "重跑：", copyBtn(`opsctl retry ${f.id}`), "看链路：", copyBtn(`opsctl task ${f.id}`))));
+  }
+  for (const a of T.agents_open) {
+    items.push(h("li", null, badge("Agent 不可用", "crit"),
+      h("div", { class: "what", text: `${a.agent} ${name("agentState", a.state)}${a.open_until ? "，到 " + when(a.open_until) + " 自动试探恢复" : ""}` }),
+      h("div", { class: "more", text: a.last_error || "" }),
+      h("div", { class: "acts" }, "确认恢复后：", copyBtn(`opsctl agents reset ${a.agent}`))));
+  }
+  if (H.hub_online === false) items.push(h("li", null, badge("中台离线", "crit"), h("div", { class: "what", text: "访问不到事件中台，定时任务和卡片都不会动" }),
+    h("div", { class: "acts" }, "检查：", copyBtn("opsctl status"))));
+  const down = (H.listener || []).filter(x => !x.connected);
+  if (down.length) items.push(h("li", null, badge("钉钉监听断开", "warn"),
+    h("div", { class: "what", text: `${down.map(x => x.name).join("、")}没连上${down.length < H.listener.length ? "（其余通道正常）" : "，群里的回复收不到"}` }),
+    h("div", { class: "more", text: down[0].error || "" })));
+  for (const sc of D.schedules.filter(x => x.status === "pending")) {
+    items.push(h("li", null, badge("定时未触发", "warn"), h("div", { class: "what", text: `${sc.rule || sc.type} 应在 ${when(sc.last_due)} 触发` }),
+      h("div", { class: "acts" }, "立即检查：", copyBtn("opsctl tick"))));
+  }
+  return { n: items.length, node: items.length ? h("ul", { class: "todo" }, items) : empty("现在没有要你处理的事。") };
+}
+function renderOverview() {
+  const k = D.kpi, d = D.daily, todo = todoList();
+  const rate = (a, b) => a.map((x, i) => (x + b[i]) ? x / (x + b[i]) : null);
+  const closeTrend = d.tasks_done.map((x, i) => x ? 1 - d.tasks_card[i] / x : null);
+  const pipeNums = {
+    content: [["内容", D.content.total], ["发布包", D.content.packs.length], ["已发布", D.content.packs.filter(p => p.status === "published").length]],
+    data: [["帖子", D.data.posts.length], ["数据快照", D.data.snapshots], ["评论", D.data.comments.total]],
+    dev: [["需求", D.demand.demands.length], ["开发中", D.demand.demands.filter(x => x.status === "in_dev").length], ["已上线", D.demand.demands.filter(x => x.status === "done").length]],
+    growth: [["线索", D.growth.total], ["待跟进", (D.growth.stages.find(x => x.label === "待跟进") || {}).n || 0], ["监听词", D.growth.terms.filter(t => t.active).length]],
+    system: [["事件", k.events], ["系统改进建议", D.feedback.total], ["失败运行", D.failed_runs.length]],
+  };
+  put($("t-overview"), 
+    h("div", { class: "card block" }, h("h2", { text: `待你处理${todo.n ? "（" + todo.n + "）" : ""}` }),
+      h("p", { class: "hint", text: "人只做两件事：批卡片，偶尔补一句。下面的回复和命令点一下就能复制。" }), todo.node),
+    h("div", { class: "grid g6" },
+      tile({ label: "事件自动闭环率", value: pct(k.auto_close_rate, 1), ok: k.auto_close_rate == null ? null : k.auto_close_rate >= 0.8, foot: `目标 ≥ 80% · 完成 ${num(k.tasks_done)} 个任务`, trend: closeTrend }),
+      tile({ label: "每天卡片数", value: num(k.cards_per_day), unit: "张", ok: k.cards_per_day <= 10, foot: `目标 ≤ 10 · 按实际运行的 ${k.active_days} 天算`, trend: d.cards }),
+      tile({ label: "卡片平均处理", value: k.avg_decision_sec == null ? "—" : dur(k.avg_decision_sec), ok: k.avg_decision_sec == null ? null : k.avg_decision_sec <= 30, foot: "目标 ≤ 30 秒 · 从发出到批完" }),
+      tile({ label: "Agent 运行成功率", value: pct(k.run_success_rate, 1), ok: k.run_success_rate == null ? null : k.run_success_rate >= 0.9, foot: `目标 ≥ 90% · 共 ${num(k.runs)} 次`, trend: rate(d.runs_ok, d.runs_fail) }),
+      tile({ label: "降级次数", value: num(k.fallback_runs), unit: "次", foot: "主 Agent 不可用时换人跑，只做观察", trend: d.fallback }),
+      tile({ label: "Agent 费用", value: "$" + num(k.cost, 2), foot: "只有 Claude 上报费用", trend: d.cost })),
+    h("div", { class: "grid g5" }, D.pipelines.map(p => h("div", { class: "card" },
+      h("h2", { text: p.name }), h("p", { class: "hint", text: `${p.rules} 条规则，${p.active_rules} 条跑过 · ${p.last_at ? "最近 " + when(p.last_at) : p.active_rules ? "只留底，不产生任务" : "还没跑过"}` }),
+      seg(p.states, true), h("div", { class: "sub", style: "margin-top:6px;font-size:12px", text: stateText(p.states) }),
+      h("div", { class: "mini" }, pipeNums[p.key].map(x => h("div", null, h("b", { text: num(x[1]) }), x[0]))),
+      h("div", { style: "margin-top:10px" }, h("button", { class: "link", text: "看详情", onclick: () => show(p.key) }))))),
+    h("div", { class: "grid g2" },
+      card("定时表", "中台每分钟检查一次；机器睡眠错过的会补发最近一次。", table(D.schedules, [
+        { t: "下一次", f: r => r.status === "off" ? "—" : when(r.next_due) },
+        { t: "做什么", cls: "wrap", f: r => [r.rule || r.type, h("span", { class: "s", text: r.spec + (r.status === "off" ? ` · 没填 ${r.requires}，不触发` : "") })] },
+        { t: "上一次", f: r => r.fired_at ? when(r.fired_at) : `${when(r.last_due)}（没跑）` },
+        { t: "状态", f: r => badge(name("sched", r.status), L.schedTone[r.status]) },
+      ])),
+      h("div", { class: "grid", style: "margin:0;align-content:start" },
+        card("今天的预算和额度", "超出单日上限的规则当天不再跑，会写进日报。", D.budgets.map(meter)),
+        card("最近的日报和周报", null, h("ul", { class: "list" }, [["日报", D.briefs.daily], ["周报", D.briefs.weekly]].map(([t, b]) =>
+          h("li", null, h("div", { class: "hd" }, h("b", { text: t }), h("small", { text: b ? `${when(b.at)} · ${b.agent}` : "还没出过" })), b && h("p", { text: b.summary }))))))),
+    card("卡片记录", `${D.window}发出的卡片和批复。`, table(D.cards, [
+      { t: "编号", f: r => "C" + r.seq }, { t: "类型", f: r => name("cardKind", r.kind) }, { t: "标题", cls: "wide", k: "title" },
+      { t: "状态", f: r => badge(name("cardStatus", r.status), L.cardTone[r.status]) }, { t: "选择", f: r => r.choice || "—" },
+      { t: "处理用时", cls: "num", f: r => r.decided_by === "timeout" ? "超时" : dur(r.decide_sec) }, { t: "发出", f: r => when(r.sent_at) },
+      { t: "批的人", f: r => r.decided_by ? h("span", { title: r.decided_by, text: r.decided_by.length > 10 ? r.decided_by.slice(0, 8) + "…" : r.decided_by }) : "—" },
+    ], { empty: "这段时间没有发过卡片" })));
+  return todo.n;
+}
+
+/* ---------- 内容 ---------- */
+function renderContent() {
+  const C = D.content, today = dayKey(GEN);
+  const childOf = id => C.calendar.flatMap(x => x.items).some(i => i.id === id);
+  put($("t-content"), 
+    h("div", { class: "grid g2" },
+      card("内容走到哪一步了", `${D.window}内每个环节通过的内容条数（同一条内容只算一次）。`,
+        hbars(C.stages.map(x => ({ label: x.name, n: x.items, note: x.events > x.items ? `共 ${x.events} 次` : null })), { pad: 130 }),
+        h("h3", { text: "返工" }),
+        C.rework.some(x => x.events) ? h("div", { class: "legend" }, C.rework.filter(x => x.events).map(x => h("span", { text: `${x.name} ${x.events} 次（${x.items} 条内容）` }))) : empty("没有打回或返工")),
+      h("div", { class: "grid", style: "margin:0;align-content:start" },
+        dist("内容状态", C.status, "content", `内容库共 ${C.total} 条。`),
+        card("各平台发布方式", "自动发布失败、登录失效都会转人工；测试内容最多试运行。",
+          C.publishers.length ? table(C.publishers, [{ t: "平台", f: r => name("platform", r.platform) }, { t: "方式", f: r => badge(name("mode", r.mode), r.mode === "live" ? "good" : r.mode === "dry_run" ? "warn" : "") }]) : empty("没有配置自动发布器")))),
+    h("div", { class: "grid g2" }, dist("内容支柱", C.pillars), dist("目标人群", C.personas)),
+    h("div", { class: "card block" }, h("h2", { text: "内容日历" }),
+      h("p", { class: "hint", text: `按内容 ID 里的计划日期排。缩进的是从上一条派生的版本。${C.undated ? `另有 ${C.undated} 条没有日期。` : ""}` }),
+      C.calendar.length ? h("div", { class: "cal" }, C.calendar.map(day => {
+        const dt = new Date(day.date + "T00:00:00");
+        return h("div", { class: "day" + (day.date === today ? " today" : "") },
+          h("h4", null, day.date.slice(5), h("small", { text: WD[dt.getDay()] + (day.date === today ? " · 今天" : "") })),
+          day.items.map(i => h("div", { class: "item" + (i.parent_id && childOf(i.parent_id) ? " child" : "") },
+            h("div", { class: "clamp", title: i.topic, text: i.topic || i.id }),
+            h("div", { class: "m" }, i.pillar && h("span", { class: "tag", text: "支柱 " + i.pillar }), i.persona && h("span", { text: i.persona }),
+              badge(name("content", i.status), i.status === "expired" ? "" : "info"),
+              i.packs.map(p => h("span", { class: "tag", text: `${name("platform", p.platform)} ${name("pack", p.status)}` }))))));
+      })) : empty("还没有排期的内容")),
+    card("发布包", "17:00 汇成「今晚发布」卡片，批准后自动发或推给人发。", table(C.packs, [
+      { t: "计划时间", f: r => when(r.scheduled_at) }, { t: "平台", f: r => name("platform", r.platform) }, { t: "标题", cls: "wrap", k: "title" },
+      { t: "方式", f: r => name("mode", r.publish_mode) }, { t: "状态", f: r => badge(name("pack", r.status), L.packTone[r.status]) },
+      { t: "执行", f: r => r.action_status ? name("action", r.action_status) : "—" }, { t: "发布包 ID", f: r => h("code", { text: r.id }) },
+    ], { empty: "还没有发布包" })),
+    h("div", { style: "height:16px" }), ruleTable("content"));
+}
+
+/* ---------- 数据回收 ---------- */
+function renderData() {
+  const A = D.data, j = A.jobs;
+  const eng = r => r.views ? ((r.likes || 0) + (r.comments || 0) + (r.shares || 0) + (r.favorites || 0)) / r.views : null;
+  const totals = A.funnel.reduce((t, r) => ({ clicks: t.clicks + (r.clicks || 0), reg: t.reg + (r.reg || 0), first_done: t.first_done + (r.first_done || 0), paid: t.paid + (r.paid || 0) }), { clicks: 0, reg: 0, first_done: 0, paid: 0 });
+  put($("t-data"), 
+    h("div", { class: "grid g6" },
+      tile({ label: "登记的帖子", value: num(A.posts.length), foot: "自动发布成功或回复「已发」后登记" }),
+      tile({ label: "数据快照", value: num(A.snapshots), foot: `已采 ${j.done} 个节点` }),
+      tile({ label: "还没到点的采集", value: num(j.pending), foot: "发布后 1 小时 / 24 小时 / 72 小时 / 7 天" }),
+      tile({ label: "到点没采到", value: num(j.overdue), ok: j.overdue ? false : null, foot: j.overdue ? "每 30 分钟会再试" : "没有积压" }),
+      tile({ label: "评论", value: num(A.comments.total), foot: "保留期到了会自动清掉" })),
+    card("自有内容最新数据", "每条取最近一次快照。节点上有删除线的是登记时已经过点、没采的。", table(A.posts, [
+      { t: "平台", f: r => name("platform", r.platform) },
+      { t: "标题", cls: "wrap", f: r => [link(r.title || r.id, r.url), h("span", { class: "s", text: [r.account, when(r.published_at) + " 发布"].filter(Boolean).join(" · ") })] },
+      { t: "播放", cls: "num", f: r => num(r.views) }, { t: "赞", cls: "num", f: r => num(r.likes) }, { t: "评", cls: "num", f: r => num(r.comments) },
+      { t: "转", cls: "num", f: r => num(r.shares) }, { t: "藏", cls: "num", f: r => num(r.favorites) },
+      { t: "互动率", cls: "num", f: r => pct(eng(r), 1) }, { t: "完播率", cls: "num", f: r => pct(r.completion_rate, 1) },
+      { t: "最近快照", f: r => r.captured_at ? when(r.captured_at) : "还没采" },
+      { t: "采集节点", f: r => h("span", { class: "chk" }, r.jobs.map(x => h("span", { class: x.state, tip: `${x.checkpoint}：${L.job[x.state]}\n应采时间 ${when(x.due_at)}${x.error ? "\n" + x.error : ""}`, text: x.checkpoint === "late" ? "补采" : x.checkpoint }))) },
+    ], { empty: "还没有登记的帖子" })),
+    h("div", { style: "height:16px" }),
+    h("div", { class: "grid g2" },
+      card("接下来要采的", "到点的指标快照任务每 30 分钟检查一次。", table(A.upcoming_jobs, [
+        { t: "应采时间", f: r => when(r.due_at) }, { t: "平台", f: r => name("platform", r.platform) }, { t: "标题", cls: "wrap", f: r => r.title || r.post_id },
+        { t: "节点", k: "checkpoint" }, { t: "试过", cls: "num", f: r => r.attempts || "—" },
+      ], { empty: "没有排队的采集" })),
+      card("评论分拣", `共 ${A.comments.total} 条。回复都要人批，发出时不带链接和联系方式。`,
+        h("h3", { text: "类型" }), hbars(A.comments.category.map(i => ({ label: name("comment", i.label), n: i.n }))),
+        h("h3", { text: "情绪" }), hbars(A.comments.sentiment.map(i => ({ label: name("comment", i.label), n: i.n }))),
+        h("h3", { text: "回复进度" }), hbars(A.comments.reply.map(i => ({ label: name("comment", i.label), n: i.n }))))),
+    h("div", { class: "grid g2" },
+      card("渠道漏斗（按天）", "每天 06:40 导入。", A.funnel.length ? [
+        h("div", { class: "mini", style: "margin:0 0 12px" }, [["点击", totals.clicks], ["注册", totals.reg], ["首条完成", totals.first_done], ["付费", totals.paid]].map(x => h("div", null, h("b", { text: num(x[1]) }), x[0])),
+          h("div", null, h("b", { text: pct(totals.clicks ? totals.reg / totals.clicks : null, 1) }), "点击 → 注册")),
+        table(A.funnel, [{ t: "日期", k: "date" }, { t: "点击", cls: "num", f: r => num(r.clicks) }, { t: "注册", cls: "num", f: r => num(r.reg) },
+          { t: "首条完成", cls: "num", f: r => num(r.first_done) }, { t: "第二条", cls: "num", f: r => num(r.second_done) }, { t: "付费", cls: "num", f: r => num(r.paid) },
+          { t: "注册率", cls: "num", f: r => pct(r.clicks ? r.reg / r.clicks : null, 1) }])] : empty("还没有漏斗数据：没有导出文件，或渠道码还没带上。")),
+      card("渠道漏斗（按渠道码）", "累计，按注册数排。", table(A.channels, [{ t: "渠道码", k: "channel" }, { t: "点击", cls: "num", f: r => num(r.clicks) },
+        { t: "注册", cls: "num", f: r => num(r.reg) }, { t: "首条完成", cls: "num", f: r => num(r.first_done) }, { t: "付费", cls: "num", f: r => num(r.paid) }], { empty: "暂无数据" }))),
+    ruleTable("data"));
+}
+
+/* ---------- 需求与开发 ---------- */
+function renderDev() {
+  const M = D.demand;
+  put($("t-dev"), 
+    h("div", { class: "grid g3" },
+      dist("需求池状态", M.status, "demand", `共 ${M.demands.length} 条需求。`),
+      dist("信号从哪来", M.signals.source, "signal", `共 ${M.signals.total} 条信号，${M.signals.unassigned} 条还没归到需求。`),
+      dist("信号类型", M.signals.kind, "kind")),
+    card("需求池", "需求分 = Σ(意图强度 × 人群权重) × 价值系数 ÷ 成本。周一出 Top 10 卡片。", table(M.demands, [
+      { t: "需求", cls: "wide", f: r => [r.title, h("span", { class: "s", text: [r.kind && name("kind", r.kind), r.module].filter(Boolean).join(" · ") })] },
+      { t: "分数", cls: "num", f: r => num(r.score, 1) }, { t: "信号", cls: "num", f: r => num(r.signal_count) }, { t: "成本", k: "cost_size" },
+      { t: "状态", f: r => badge(name("demand", r.status), L.demandTone[r.status]) }, { t: "PRD", f: r => r.has_prd ? "已写" : "—" },
+      { t: "MR", f: r => r.mr_links.length ? r.mr_links.map((u, i) => [i ? " " : null, link("!" + (u.split("/").pop() || i + 1), u)]) : "—" },
+      { t: "更新", f: r => when(r.updated_at) },
+    ], { empty: "需求池是空的" })),
+    h("div", { style: "height:16px" }),
+    h("div", { class: "grid g2" },
+      card("最近的信号", "来自评论、社媒监听、需求挖掘和线上故障的原话。", M.signals.recent.length ? h("ul", { class: "list" }, M.signals.recent.map(x =>
+        h("li", null, h("div", { class: "hd" }, h("b", { text: x.module || x.kind || "信号" }),
+          h("small", { text: [name("signal", x.source_type), x.kind && name("kind", x.kind), x.persona, x.intensity != null ? `强度 ${x.intensity}` : null, when(x.created_at)].filter(Boolean).join(" · ") })),
+          h("p", { text: x.quote })))) : empty()),
+      card("自己用产品时碰到的问题", "Agent 用 Popto 功能时遇到的报错、超时、难用，会自动进需求池。", M.friction.length ? h("ul", { class: "list" }, M.friction.map(x =>
+        h("li", null, h("div", { class: "hd" }, h("b", { text: x.feature || "未注明功能" }), h("small", { text: when(x.at) })), h("p", { text: x.problem })))) : empty("这段时间没有记录"))),
+    ruleTable("dev"));
+}
+
+/* ---------- 获客 ---------- */
+function renderGrowth() {
+  const G = D.growth, latest = (t, x, none) => card(t, x ? `${when(x.at)} · ${x.agent || "—"} · ${name("state", x.state)}` : null, x ? h("p", { style: "margin:0;color:var(--ink2)", text: x.summary || "没有摘要" }) : empty(none));
+  const cats = [...new Set(G.terms.map(t => t.category))];
+  put($("t-growth"), 
+    h("div", { class: "grid g2" },
+      dist("线索走到哪一步", G.stages, null, `共 ${G.total} 条。批准后记为“待跟进”，由人用品牌号互动，系统不自动评论或私信。`),
+      dist("线索类型", G.types, "lead")),
+    h("div", { class: "grid g2" }, dist("行业", G.industries), dist("平台", G.platforms, "platform")),
+    card("线索", "按分数排。", table(G.leads, [
+      { t: "账号", f: r => [link(r.nickname || r.id, r.profile_url), h("span", { class: "s", text: [name("platform", r.platform), r.industry, name("lead", r.lead_type)].filter(Boolean).join(" · ") })] },
+      { t: "粉丝", cls: "num", f: r => num(r.followers) }, { t: "分数", cls: "num", f: r => num(r.score) }, { t: "阶段", k: "stage" },
+      { t: "为什么是线索", cls: "wide", f: r => h("span", { class: "clamp", title: r.why, text: r.why || "—" }) },
+      { t: "建议怎么互动", cls: "wide", f: r => h("span", { class: "clamp", title: r.outreach_draft, text: r.outreach_draft || "—" }) },
+      { t: "更新", f: r => when(r.updated_at) },
+    ], { empty: "还没有线索" })),
+    h("div", { style: "height:16px" }),
+    h("div", { class: "grid g2" },
+      card("监听词近 7 天命中", `${G.terms.filter(t => t.active).length} 个启用词，${G.terms.filter(t => t.active && !t.hits_7d).length} 个没有命中。`,
+        G.terms.length ? cats.map(c => [h("h3", { text: name("term", c) }), hbars(G.terms.filter(t => t.category === c).map(t => ({ label: t.term + (t.active ? "" : "（停用）"), n: t.hits_7d })), { pad: 40 })]) : empty("还没有监听词")),
+      h("div", { class: "grid", style: "margin:0;align-content:start" },
+        latest("最近一次社媒监听", G.listening, "还没跑过（每天 14:00）"),
+        latest("最近一次 GEO 检查", G.geo, "还没跑过（周三 10:00，看 Popto 在 AI 搜索答案里的可见度）"))),
+    ruleTable("growth"));
+}
+
+/* ---------- 系统 ---------- */
+function renderSystem() {
+  const d = D.daily, css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  put($("t-system"), 
+    h("div", { class: "grid g2" },
+      card("每天的 Agent 运行次数", `${D.window}共 ${num(D.kpi.runs)} 次，含确定性脚本。`, D.kpi.runs ? columns(d.days, [
+        { name: "成功", v: d.runs_ok, color: css("--s1") }, { name: "失败", v: d.runs_fail, color: css("--crit") }]) : empty("这段时间没有运行")),
+      card("事件去向", `${D.window}共 ${num(D.kpi.events)} 个事件。`, table(D.events.slice(0, 14), [
+        { t: "事件类型", f: r => h("code", { text: r.type }) }, { t: "去向", f: r => name("routed", r.routed) }, { t: "数量", cls: "num", f: r => num(r.n) }, { t: "最近", f: r => when(r.last_at) }]),
+        D.events.length > 14 && h("details", null, h("summary", { text: `其余 ${D.events.length - 14} 种` }), table(D.events.slice(14), [
+          { t: "事件类型", f: r => h("code", { text: r.type }) }, { t: "去向", f: r => name("routed", r.routed) }, { t: "数量", cls: "num", f: r => num(r.n) }, { t: "最近", f: r => when(r.last_at) }])))),
+    card("Agent", "额度或认证错误会熔断并换下一个；同一个 Agent 连续 3 次超时熔断 30 分钟。", table(D.agents, [
+      { t: "Agent", f: r => [r.agent, h("span", { class: "s", text: (r.capabilities || []).join(" / ") })] },
+      { t: "状态", f: r => [badge(name("agentState", r.state), L.agentTone[r.state]), r.open_until && h("span", { class: "s", text: "到 " + when(r.open_until) })] },
+      { t: "运行", cls: "num", f: r => r.runs || "—" }, { t: "成功率", cls: "num", f: r => r.runs ? pct(r.ok / r.runs) : "—" },
+      { t: "失败", cls: "wrap", f: r => r.fail ? Object.entries(r.errors).map(([k, n]) => `${name("err", k)} ${n}`).join(" · ") : "—" },
+      { t: "被当替补", cls: "num", f: r => r.fallback || "—" }, { t: "平均耗时", cls: "num", f: r => dur(r.avg_s) }, { t: "费用", cls: "num", f: r => r.cost ? "$" + num(r.cost, 2) : "—" },
+      { t: "并发", cls: "num", f: r => r.concurrency ?? "—" }, { t: "周用量", cls: "num", f: r => r.usage_ratio == null ? "未登记" : pct(r.usage_ratio) },
+    ])),
+    h("div", { style: "height:16px" }),
+    h("div", { class: "grid g2" },
+      card("失败的运行", "失败后已经自动重试或换 Agent；最终没救回来的任务在总览的“待你处理”里。", table(D.failed_runs, [
+        { t: "时间", f: r => when(r.finished_at) }, { t: "规则", cls: "wrap", f: r => [r.rule || r.task_id, h("span", { class: "s", text: `${r.agent}${r.is_fallback ? "（替补）" : ""} · ${name("err", r.error_kind || r.status)} · ${dur(r.duration_s)}` })] },
+        { t: "原因", cls: "wide", f: r => h("span", { class: "clamp", title: r.error_detail, text: r.error_detail || "—" }) },
+      ], { empty: "这段时间没有失败的运行" })),
+      h("div", { class: "grid", style: "margin:0;align-content:start" },
+        card("正在排队和等批的任务", null, table(D.queue, [
+          { t: "规则", cls: "wrap", f: r => [r.rule, h("span", { class: "s", text: r.summary || "" })] }, { t: "状态", f: r => badge(name("state", r.state), L.stateTone[r.state]) },
+          { t: "优先级", cls: "num", f: r => "P" + r.priority }, { t: "进队列", f: r => when(r.created_at) }], { empty: "队列是空的" })),
+        card("发出去的通知", "中台是唯一的通知出口。", hbars(D.outbox.map(o => ({ label: name("outbox", o.kind) + (o.status === "sent" ? "" : `（${o.status}）`), n: o.n })), { empty: "这段时间没有发过通知" })))),
+    h("div", { class: "grid g2" },
+      card("系统改进建议", `Agent 干活时发现的运营系统自身问题，${D.window}共 ${D.feedback.total} 条，显示最近 ${D.feedback.items.length} 条。`,
+        D.feedback.items.length ? [h("ul", { class: "list" }, D.feedback.items.slice(0, 8).map(fbItem)),
+          D.feedback.items.length > 8 && h("details", null, h("summary", { text: `再看 ${D.feedback.items.length - 8} 条` }), h("ul", { class: "list", style: "margin-top:10px" }, D.feedback.items.slice(8).map(fbItem)))] : empty("这段时间没有")),
+      card("定的事和定了不做的事", "Agent 执行前先查这里，定过的直接照办。", D.decisions.length ? h("ul", { class: "list" }, D.decisions.map(x =>
+        h("li", null, h("div", { class: "hd" }, h("b", { text: x.title }), h("small", { text: [x.kind, x.id, x.date, x.review && "复查 " + x.review].filter(Boolean).join(" · ") })), x.scope && h("p", { text: x.scope })))) : empty())),
+    ruleTable("system"));
+}
+const fbItem = x => h("li", null, h("div", { class: "hd" }, h("b", { text: x.area || "未注明" }), h("small", { text: when(x.at) })),
+  h("p", { text: x.problem }), x.suggestion && h("p", { text: "建议：" + x.suggestion }));
+
+/* ---------- 页签与提示 ---------- */
+const TABS = [["overview", "总览"], ["content", "内容"], ["data", "数据回收"], ["dev", "需求与开发"], ["growth", "获客"], ["system", "系统"]];
+function show(key) {
+  if (!TABS.some(t => t[0] === key)) key = "overview";
+  for (const [k] of TABS) {
+    $("t-" + k).classList.toggle("on", k === key);
+    $("tab-" + k).setAttribute("aria-selected", String(k === key));
+  }
+  try { history.replaceState(null, "", "#" + key); } catch (e) { /* file:// 下个别浏览器不让改地址，不影响切换 */ }
+  window.scrollTo(0, 0);
+}
+function initTip() {
+  const tip = $("tip");
+  const at = (el, x, y) => {
+    tip.textContent = el.dataset.tip; tip.style.display = "block";
+    const r = tip.getBoundingClientRect();
+    tip.style.left = Math.max(8, Math.min(x + 12, innerWidth - r.width - 8)) + "px";
+    tip.style.top = (y + 16 + r.height > innerHeight ? y - r.height - 10 : y + 16) + "px";
+  };
+  const find = t => t && t.closest ? t.closest("[data-tip]") : null;
+  document.addEventListener("pointermove", e => { const el = find(e.target); el ? at(el, e.clientX, e.clientY) : (tip.style.display = "none"); });
+  document.addEventListener("focusin", e => { const el = find(e.target); if (el) { const r = el.getBoundingClientRect(); at(el, r.left, r.bottom - 8); } });
+  document.addEventListener("focusout", () => { tip.style.display = "none"; });
+}
+
+if (!D) {
+  $("sub").textContent = "没有数据：请用 opsctl dashboard 生成。";
+} else {
+  put($("tabs"), TABS.map(([k, t]) => h("button", { id: "tab-" + k, role: "tab", text: t, onclick: () => show(k) })));
+  renderTop();
+  const todo = renderOverview();
+  if (todo) put($("tab-overview"), h("span", { class: "n", text: todo }));
+  renderContent(); renderData(); renderDev(); renderGrowth(); renderSystem();
+  initTip();
+  show(location.hash.slice(1) || "overview");
 }
 </script>
 </body>

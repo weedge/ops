@@ -33,5 +33,13 @@ def last_due(spec: dict, at: datetime) -> datetime:
     return cand
 
 
+def next_due(spec: dict, at: datetime) -> datetime:
+    """返回 > at 的下一次触发时刻（看板用）。"""
+    last = last_due(spec, at)
+    if "every" in spec:
+        return last + parse_duration(spec["every"])
+    return last + timedelta(days=7 if len(str(spec["at"]).split()) == 2 else 1)
+
+
 def max_late(spec: dict) -> timedelta:
     return parse_duration(spec.get("max_late"), timedelta(hours=12))
